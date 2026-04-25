@@ -20,9 +20,9 @@ CATEGORIES: dict[str, dict] = {
         "name_ja": "テレビゲーム",
         "id": "2084017887",
         "subcategories": {
-            "nintendo_switch": {"name_ja": "Nintendo Switch", "id": "2084030018"},
-            "ps5":             {"name_ja": "PlayStation 5",   "id": "2084048606"},
-            "ps4":             {"name_ja": "PlayStation 4",   "id": "2084036323"},
+            "nintendo_switch": {"name_ja": "任天堂スイッチ",       "id": "2084030018"},
+            "ps5":             {"name_ja": "プレイステーション5",   "id": "2084048606"},
+            "ps4":             {"name_ja": "プレイステーション4",   "id": "2084036323"},
         },
     },
     "cameras": {
