@@ -206,6 +206,9 @@ Running `track` on the same day again updates prices rather than creating duplic
 ### 5.3 `report`
 
 Display price history and statistical summary for a tracked keyword.
+Supports three output formats: terminal table, CSV file, and **HTML report**.
+
+> **Note:** The `report` command opens the database in **read-only mode** — it never modifies any data.
 
 ```
 python main.py report --keyword KEYWORD [OPTIONS]
@@ -216,20 +219,43 @@ python main.py report --keyword KEYWORD [OPTIONS]
 | `-k / --keyword` | *(required)* | Keyword to report on |
 | `-c / --category` | none | Category alias or numeric ID |
 | `--days` | 30 | Number of past days to include |
-| `--format` | `table` | Output format: `table` or `csv` |
+| `--format` | `table` | Output format: `table`, `csv`, or `html` |
+| `-o / --output` | auto | Output file path (HTML/CSV); defaults to `<keyword>_report.html` or stdout |
 
 **Examples:**
 
 ```bash
-# Show 30-day report
+# Show 30-day report in the terminal
 python main.py report --keyword "Nintendo Switch"
 
 # Show 7-day report for a specific category
 python main.py report --keyword "Nintendo Switch" --category nintendo_switch --days 7
 
-# Export as CSV
+# Generate an HTML report file (default name: Nintendo_Switch_report.html)
+python main.py report --keyword "Nintendo Switch" --format html
+
+# Generate HTML to a custom path
+python main.py report --keyword "Nintendo Switch" --format html --output ~/reports/switch.html
+
+# Export as CSV to stdout
 python main.py report --keyword "Nintendo Switch" --format csv > switch_prices.csv
+
+# Export CSV to a file
+python main.py report --keyword "Nintendo Switch" --format csv --output switch_prices.csv
 ```
+
+#### HTML Report
+
+The HTML report is a **self-contained single file** — open it in any browser with no internet connection required for the table. The price chart loads [Chart.js](https://www.chartjs.org/) from a CDN (internet needed for the chart only).
+
+The report contains:
+
+| Section | Contents |
+|---------|----------|
+| **Header** | Keyword, category, period, generation time, trend badge |
+| **Stats cards** | Items tracked, snapshots, avg / min / max / median price, avg bids |
+| **Average daily price chart** | Line chart of daily average price over the selected period |
+| **Price history table** | All snapshots: date, title (linked to Yahoo), price, buy-now, bids, condition, status |
 
 **Summary block** includes:
 
@@ -477,10 +503,28 @@ Add the following line to run at 09:00 JST (adjust for your server's timezone):
 
 ## 10. Exporting Data
 
+### HTML Report
+
+Generates a self-contained HTML file with a price chart and a full history table.
+
+```bash
+# Default filename: <keyword>_report.html
+python main.py report --keyword "Nintendo Switch" --format html
+
+# Custom output path
+python main.py report --keyword "Nintendo Switch" --format html --output ~/reports/switch.html
+```
+
+Open the resulting `.html` file in any browser — no server needed.
+
 ### CSV Export via CLI
 
 ```bash
+# Print to stdout
 python main.py report --keyword "Nintendo Switch" --format csv > nintendo_switch.csv
+
+# Save directly to file
+python main.py report --keyword "Nintendo Switch" --format csv --output nintendo_switch.csv
 ```
 
 The CSV columns are:

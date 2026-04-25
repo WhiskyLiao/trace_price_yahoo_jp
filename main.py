@@ -3,7 +3,9 @@ from __future__ import annotations
 
 import csv
 import logging
+import sqlite3
 import sys
+from pathlib import Path
 from typing import Optional
 
 import click
@@ -30,6 +32,7 @@ from yahoo_auction_tracker.scraper import (
     search_active,
     search_closed,
 )
+from yahoo_auction_tracker.html_report import generate_html
 from yahoo_auction_tracker.tracker import AuctionTracker, get_japan_time
 
 
@@ -208,9 +211,13 @@ def track(ctx: click.Context, keyword: str, category: Optional[str], no_closed: 
 @click.option("--days", default=30, show_default=True, help="Number of days of history to show")
 @click.option(
     "--format", "fmt",
-    type=click.Choice(["table", "csv"]),
+    type=click.Choice(["table", "csv", "html"]),
     default="table",
     show_default=True,
+)
+@click.option(
+    "--output", "-o", default=None,
+    help="Output file path for html/csv format (default: <keyword>_report.html or stdout)",
 )
 @click.pass_context
 def report(
@@ -219,15 +226,42 @@ def report(
     category: Optional[str],
     days: int,
     fmt: str,
+    output: Optional[str],
 ) -> None:
-    """Show price history and trend summary for a keyword."""
+    """Show price history and trend summary for a keyword.
+
+    Use --format html to generate a standalone HTML report file with a price chart.
+    """
     cat_id = _resolve_or_exit(category)
-    conn = init_db(ctx.obj["db_path"])
+
+    # Open DB read-only — report never writes
+    conn = sqlite3.connect(f"file:{ctx.obj['db_path']}?mode=ro", uri=True)
+    conn.row_factory = sqlite3.Row
     try:
+        summary = get_price_summary(conn, keyword, cat_id, days=days)
+        history = get_price_history(conn, keyword, cat_id, days=days)
+    except sqlite3.OperationalError:
+        # DB doesn't exist yet — open normally so we get an empty result
+        conn.close()
+        conn = init_db(ctx.obj["db_path"])
         summary = get_price_summary(conn, keyword, cat_id, days=days)
         history = get_price_history(conn, keyword, cat_id, days=days)
     finally:
         conn.close()
+
+    if fmt == "html":
+        safe_keyword = "".join(c if c.isalnum() else "_" for c in keyword)
+        out_path = Path(output) if output else Path(f"{safe_keyword}_report.html")
+        html_content = generate_html(
+            summary,
+            history,
+            keyword=keyword,
+            category_id=cat_id,
+            days=days,
+        )
+        out_path.write_text(html_content, encoding="utf-8")
+        click.echo(f"HTML report saved to: {out_path.resolve()}")
+        return
 
     if fmt == "table":
         trend_color = {"up": "red", "down": "green", "stable": "cyan"}.get(
@@ -270,17 +304,24 @@ def report(
             )
         else:
             click.echo("\nNo history found. Run 'track' first.")
-    else:
-        writer = csv.writer(sys.stdout)
-        writer.writerow(["date", "item_id", "title", "current_price", "buynow_price",
-                         "bid_count", "condition", "is_closed", "item_url"])
-        for r in history:
-            writer.writerow([
-                r["snapshot_date"], r["item_id"], r["title"],
-                r["current_price"] or "", r["buynow_price"] or "",
-                r["bid_count"], r["condition"] or "", r["is_closed"],
-                r["item_url"],
-            ])
+
+    else:  # csv
+        dest = open(output, "w", newline="", encoding="utf-8") if output else sys.stdout
+        try:
+            writer = csv.writer(dest)
+            writer.writerow(["date", "item_id", "title", "current_price", "buynow_price",
+                             "bid_count", "condition", "is_closed", "item_url"])
+            for r in history:
+                writer.writerow([
+                    r["snapshot_date"], r["item_id"], r["title"],
+                    r["current_price"] or "", r["buynow_price"] or "",
+                    r["bid_count"], r["condition"] or "", r["is_closed"],
+                    r["item_url"],
+                ])
+        finally:
+            if output:
+                dest.close()
+                click.echo(f"CSV saved to: {Path(output).resolve()}")
 
 
 # ---------------------------------------------------------------------------
