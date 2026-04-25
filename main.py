@@ -1,0 +1,389 @@
+#!/usr/bin/env python3
+from __future__ import annotations
+
+import csv
+import logging
+import sys
+from typing import Optional
+
+import click
+from tabulate import tabulate
+
+from yahoo_auction_tracker.config import (
+    CATEGORIES,
+    DEFAULT_SETTINGS,
+    CATEGORY_ID_TO_NAME,
+    resolve_category,
+)
+from yahoo_auction_tracker.database import (
+    delete_search,
+    get_latest_prices,
+    get_price_history,
+    get_price_summary,
+    init_db,
+    list_searches,
+)
+from yahoo_auction_tracker.scraper import (
+    RateLimitError,
+    ScraperError,
+    build_session,
+    search_active,
+    search_closed,
+)
+from yahoo_auction_tracker.tracker import AuctionTracker, get_japan_time
+
+
+def _truncate(text: str, width: int = 45) -> str:
+    return text if len(text) <= width else text[: width - 1] + "…"
+
+
+def _fmt_price(price: Optional[int]) -> str:
+    if price is None:
+        return "-"
+    return f"¥{price:,}"
+
+
+def _resolve_or_exit(category: Optional[str]) -> Optional[str]:
+    if not category:
+        return None
+    cat_id = resolve_category(category)
+    if cat_id is None:
+        click.echo(
+            click.style(
+                f"Error: unknown category '{category}'. "
+                "Use 'list-categories' to see valid aliases.",
+                fg="red",
+            ),
+            err=True,
+        )
+        sys.exit(1)
+    return cat_id
+
+
+@click.group()
+@click.option("--db", default=None, help="Path to SQLite database (default: auction_tracker.db)")
+@click.option("--verbose", "-v", is_flag=True, help="Enable debug logging")
+@click.pass_context
+def cli(ctx: click.Context, db: Optional[str], verbose: bool) -> None:
+    """Yahoo Japan Auction Price Tracker
+
+    Track and analyse auction prices by keyword and category.
+    Japan Standard Time is fetched from worldtimeapi.org for accurate daily snapshots.
+    """
+    ctx.ensure_object(dict)
+    ctx.obj["db_path"] = db or DEFAULT_SETTINGS["db_path"]
+    level = logging.DEBUG if verbose else logging.INFO
+    logging.basicConfig(
+        level=level,
+        format="%(asctime)s %(levelname)s %(name)s: %(message)s" if verbose else "%(message)s",
+    )
+
+
+# ---------------------------------------------------------------------------
+# list-categories
+# ---------------------------------------------------------------------------
+
+@cli.command("list-categories")
+def list_categories() -> None:
+    """Show all supported category aliases and their IDs."""
+    rows = []
+    for alias, cat in CATEGORIES.items():
+        rows.append([alias, cat["id"], cat["name_ja"], ""])
+        for sub_alias, sub in cat.get("subcategories", {}).items():
+            rows.append(["", sub["id"], sub["name_ja"], f"  └ {sub_alias}"])
+    click.echo(tabulate(rows, headers=["Alias", "Category ID", "日本語名", "Sub-alias"]))
+
+
+# ---------------------------------------------------------------------------
+# japan-time
+# ---------------------------------------------------------------------------
+
+@cli.command("japan-time")
+def japan_time_cmd() -> None:
+    """Show the current Japan Standard Time fetched from worldtimeapi.org."""
+    jst = get_japan_time()
+    click.echo(f"Japan Standard Time (JST): {jst.strftime('%Y-%m-%d %H:%M:%S %Z%z')}")
+
+
+# ---------------------------------------------------------------------------
+# search (no DB write)
+# ---------------------------------------------------------------------------
+
+@cli.command()
+@click.option("--keyword", "-k", required=True, help="Search keyword")
+@click.option("--category", "-c", default=None, help="Category alias or numeric ID")
+@click.option("--closed", is_flag=True, default=False, help="Search closed/sold auctions")
+@click.option("--pages", default=2, show_default=True, help="Pages to fetch (1–5)")
+@click.pass_context
+def search(
+    ctx: click.Context,
+    keyword: str,
+    category: Optional[str],
+    closed: bool,
+    pages: int,
+) -> None:
+    """Search auctions and display results (does not save to database)."""
+    cat_id = _resolve_or_exit(category)
+    pages = max(1, min(pages, 5))
+    session = build_session()
+    try:
+        fn = search_closed if closed else search_active
+        items = fn(session, keyword, cat_id, max_pages=pages)
+    except RateLimitError as exc:
+        click.echo(click.style(f"Rate limit: {exc}", fg="red"), err=True)
+        sys.exit(1)
+    except ScraperError as exc:
+        click.echo(click.style(f"Scraper error: {exc}", fg="red"), err=True)
+        sys.exit(1)
+    finally:
+        session.close()
+
+    if not items:
+        click.echo("No results found.")
+        return
+
+    rows = [
+        [
+            _truncate(i.title),
+            _fmt_price(i.current_price),
+            _fmt_price(i.buynow_price),
+            i.bid_count,
+            i.time_remaining or "-",
+            i.condition or "-",
+        ]
+        for i in items
+    ]
+    click.echo(
+        tabulate(
+            rows,
+            headers=["Title", "Price", "Buy-Now", "Bids", "Time Remaining", "Condition"],
+            tablefmt="rounded_outline",
+        )
+    )
+    click.echo(f"\nTotal: {len(items)} items")
+
+
+# ---------------------------------------------------------------------------
+# track (one-shot scrape + save)
+# ---------------------------------------------------------------------------
+
+@cli.command()
+@click.option("--keyword", "-k", required=True)
+@click.option("--category", "-c", default=None, help="Category alias or numeric ID")
+@click.option("--no-closed", is_flag=True, default=False, help="Skip closed auction search")
+@click.pass_context
+def track(ctx: click.Context, keyword: str, category: Optional[str], no_closed: bool) -> None:
+    """Run a one-time update: scrape auctions and save prices to database."""
+    cat_id = _resolve_or_exit(category)
+    tracker = AuctionTracker(db_path=ctx.obj["db_path"])
+    try:
+        result = tracker.run_daily_update(keyword, cat_id, include_closed=not no_closed)
+    finally:
+        tracker.close()
+
+    rows = [
+        ["Snapshot date", result["snapshot_date"]],
+        ["Keyword", result["keyword"]],
+        ["Category ID", result["category_id"] or "any"],
+        ["Active items fetched", result["active_count"]],
+        ["Closed items fetched", result["closed_count"]],
+        ["New items saved", result["new_items"]],
+        ["Items updated", result["updated_items"]],
+    ]
+    click.echo(tabulate(rows, tablefmt="rounded_outline"))
+
+    if result["errors"]:
+        click.echo(click.style("\nWarnings:", fg="yellow"))
+        for err in result["errors"]:
+            click.echo(f"  • {err}")
+
+
+# ---------------------------------------------------------------------------
+# report
+# ---------------------------------------------------------------------------
+
+@cli.command()
+@click.option("--keyword", "-k", required=True)
+@click.option("--category", "-c", default=None)
+@click.option("--days", default=30, show_default=True, help="Number of days of history to show")
+@click.option(
+    "--format", "fmt",
+    type=click.Choice(["table", "csv"]),
+    default="table",
+    show_default=True,
+)
+@click.pass_context
+def report(
+    ctx: click.Context,
+    keyword: str,
+    category: Optional[str],
+    days: int,
+    fmt: str,
+) -> None:
+    """Show price history and trend summary for a keyword."""
+    cat_id = _resolve_or_exit(category)
+    conn = init_db(ctx.obj["db_path"])
+    try:
+        summary = get_price_summary(conn, keyword, cat_id, days=days)
+        history = get_price_history(conn, keyword, cat_id, days=days)
+    finally:
+        conn.close()
+
+    if fmt == "table":
+        trend_color = {"up": "red", "down": "green", "stable": "cyan"}.get(
+            summary["price_trend"], "white"
+        )
+        click.echo(click.style(f"\n=== Price Summary: {keyword} ===", bold=True))
+        summary_rows = [
+            ["Period", f"{days} days"],
+            ["Items tracked", summary["item_count"]],
+            ["Snapshots", summary["snapshot_count"]],
+            ["Avg price", _fmt_price(int(summary["avg_price"])) if summary["avg_price"] else "-"],
+            ["Min price", _fmt_price(summary["min_price"])],
+            ["Max price", _fmt_price(summary["max_price"])],
+            ["Median price", _fmt_price(int(summary["median_price"])) if summary["median_price"] else "-"],
+            ["Avg bids", summary["avg_bid_count"] or "-"],
+            ["Trend", click.style(summary["price_trend"], fg=trend_color)],
+        ]
+        click.echo(tabulate(summary_rows, tablefmt="rounded_outline"))
+
+        if history:
+            click.echo(click.style("\n=== Price History ===", bold=True))
+            h_rows = [
+                [
+                    r["snapshot_date"],
+                    _truncate(r["title"], 35),
+                    _fmt_price(r["current_price"]),
+                    _fmt_price(r["buynow_price"]),
+                    r["bid_count"],
+                    r["condition"] or "-",
+                    "closed" if r["is_closed"] else "active",
+                ]
+                for r in history
+            ]
+            click.echo(
+                tabulate(
+                    h_rows,
+                    headers=["Date", "Title", "Price", "Buy-Now", "Bids", "Condition", "Status"],
+                    tablefmt="rounded_outline",
+                )
+            )
+        else:
+            click.echo("\nNo history found. Run 'track' first.")
+    else:
+        writer = csv.writer(sys.stdout)
+        writer.writerow(["date", "item_id", "title", "current_price", "buynow_price",
+                         "bid_count", "condition", "is_closed", "item_url"])
+        for r in history:
+            writer.writerow([
+                r["snapshot_date"], r["item_id"], r["title"],
+                r["current_price"] or "", r["buynow_price"] or "",
+                r["bid_count"], r["condition"] or "", r["is_closed"],
+                r["item_url"],
+            ])
+
+
+# ---------------------------------------------------------------------------
+# schedule
+# ---------------------------------------------------------------------------
+
+@cli.command()
+@click.option("--keyword", "-k", required=True)
+@click.option("--category", "-c", default=None)
+@click.option("--time", "run_time", default="09:00", show_default=True,
+              help="Daily run time HH:MM in Japan Standard Time")
+@click.option("--run-now", is_flag=True, default=False,
+              help="Run an immediate update before entering the daily schedule")
+@click.option("--no-closed", is_flag=True, default=False)
+@click.pass_context
+def schedule(
+    ctx: click.Context,
+    keyword: str,
+    category: Optional[str],
+    run_time: str,
+    run_now: bool,
+    no_closed: bool,
+) -> None:
+    """Schedule daily price tracking (blocks until Ctrl+C)."""
+    import re as _re
+    if not _re.match(r"^\d{2}:\d{2}$", run_time):
+        click.echo(click.style("Error: --time must be in HH:MM format", fg="red"), err=True)
+        sys.exit(1)
+
+    cat_id = _resolve_or_exit(category)
+    tracker = AuctionTracker(db_path=ctx.obj["db_path"])
+
+    jst = get_japan_time()
+    click.echo(f"Current Japan time: {jst.strftime('%Y-%m-%d %H:%M:%S JST')}")
+    click.echo(f"Scheduled daily update for '{keyword}' at {run_time} JST.")
+    click.echo("Press Ctrl+C to stop.\n")
+
+    try:
+        tracker.schedule_daily(
+            keyword,
+            cat_id,
+            run_time=run_time,
+            include_closed=not no_closed,
+            run_now=run_now,
+        )
+    finally:
+        tracker.close()
+
+
+# ---------------------------------------------------------------------------
+# list (tracked searches)
+# ---------------------------------------------------------------------------
+
+@cli.command("list")
+@click.pass_context
+def list_cmd(ctx: click.Context) -> None:
+    """List all tracked keyword/category configurations."""
+    conn = init_db(ctx.obj["db_path"])
+    try:
+        searches = list_searches(conn)
+    finally:
+        conn.close()
+
+    if not searches:
+        click.echo("No tracked searches yet. Run 'track' to start.")
+        return
+
+    rows = [
+        [
+            s["id"],
+            s["keyword"],
+            CATEGORY_ID_TO_NAME.get(s["category_id"] or "", s["category_id"] or "any"),
+            s["last_run_at"] or "never",
+            s["item_count"],
+            "active" if s["is_active"] else "paused",
+        ]
+        for s in searches
+    ]
+    click.echo(
+        tabulate(
+            rows,
+            headers=["ID", "Keyword", "Category", "Last Run (UTC)", "Items", "Status"],
+            tablefmt="rounded_outline",
+        )
+    )
+
+
+# ---------------------------------------------------------------------------
+# delete
+# ---------------------------------------------------------------------------
+
+@cli.command()
+@click.argument("search_id", type=int)
+@click.pass_context
+def delete(ctx: click.Context, search_id: int) -> None:
+    """Delete a tracked search and all its history by ID."""
+    conn = init_db(ctx.obj["db_path"])
+    try:
+        delete_search(conn, search_id)
+    finally:
+        conn.close()
+    click.echo(f"Deleted search ID {search_id} and all associated data.")
+
+
+if __name__ == "__main__":
+    cli()
