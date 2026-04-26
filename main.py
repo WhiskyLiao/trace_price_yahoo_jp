@@ -603,7 +603,8 @@ def kaiju(
         if leaf is None:
             click.echo(click.style(
                 "Could not resolve the category path against Yahoo's live tree.\n"
-                "Try `python main.py browse` to walk it manually.",
+                f"Try deleting '{cache}' to force a fresh fetch, or run\n"
+                "`python main.py browse` to walk the tree manually.",
                 fg="red"), err=True)
             sys.exit(1)
         click.echo(f"  → leaf: {leaf.name} [{leaf.id}]")

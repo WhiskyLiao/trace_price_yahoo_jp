@@ -268,7 +268,19 @@ def load_cache(path: Path) -> Optional[list[CategoryNode]]:
         cached_at = datetime.fromisoformat(data["cached_at"])
         if datetime.now() - cached_at > timedelta(days=CACHE_TTL_DAYS):
             return None
-        return [CategoryNode.from_dict(c) for c in data["categories"]]
+        nodes = [CategoryNode.from_dict(c) for c in data["categories"]]
+        # Strip noise that older versions of fetch_top_categories may have
+        # written ("+条件指定" et al.) and treat the cache as a miss if what's
+        # left looks broken. Without this, a cache file written before the
+        # noise-filter shipped will keep poisoning resolution forever.
+        nodes = [n for n in nodes if not _is_noise_name(n.name)]
+        if len(nodes) < MIN_TOP_CATEGORIES:
+            logger.info(
+                "Cached top-category list has only %d node(s) after noise filter — "
+                "treating as miss and re-fetching.", len(nodes),
+            )
+            return None
+        return nodes
     except Exception:
         return None
 
