@@ -21,6 +21,24 @@ MAIN_PAGE_URL = "https://auctions.yahoo.co.jp/"
 # Use the search URL with auccat= filter to get subcategory navigation links;
 # /category/list/{id} returns 404 for most category IDs.
 CATEGORY_PAGE_URL = "https://auctions.yahoo.co.jp/search/search?auccat={cat_id}"
+
+# Top-level categories used to come from the main page, but Yahoo now renders
+# that list via JS — only the "+条件指定" filter link is in the static HTML.
+# These server-rendered URLs still include the full category list as
+# ?auccat=… anchors, so we walk this chain in order and accept the first
+# response that yields ≥ MIN_TOP_CATEGORIES sensible nodes.
+TOP_CATEGORY_URL_CANDIDATES = (
+    "https://auctions.yahoo.co.jp/search/search?p=",
+    "https://auctions.yahoo.co.jp/category/list",
+    "https://auctions.yahoo.co.jp/",  # last‑ditch fallback (current behavior)
+)
+MIN_TOP_CATEGORIES = 5
+
+# Names that match _parse_links' selector but are not real categories — Yahoo
+# wires several admin/filter links to ?auccat= or /list/ URLs.
+_NOISE_NAME_SUBSTRINGS = ("条件指定", "ログイン", "ヘルプ", "条件を保存")
+_NOISE_NAME_PREFIXES = ("＋", "+")
+
 CACHE_TTL_DAYS = 7
 
 
@@ -56,6 +74,13 @@ def _extract_cat_id(href: str) -> Optional[str]:
     return None
 
 
+def _is_noise_name(name: str) -> bool:
+    """True for non-category links that share our auccat=/list/ selector."""
+    if any(name.startswith(p) for p in _NOISE_NAME_PREFIXES):
+        return True
+    return any(s in name for s in _NOISE_NAME_SUBSTRINGS)
+
+
 def _parse_links(soup: BeautifulSoup, exclude_id: Optional[str] = None) -> list[CategoryNode]:
     seen: set[str] = set()
     nodes: list[CategoryNode] = []
@@ -67,6 +92,8 @@ def _parse_links(soup: BeautifulSoup, exclude_id: Optional[str] = None) -> list[
             continue
         name = a.get_text(strip=True)
         if not name or len(name) > 60 or len(name) < 2:
+            continue
+        if _is_noise_name(name):
             continue
         seen.add(cat_id)
         nodes.append(CategoryNode(id=cat_id, name=name))
@@ -87,12 +114,34 @@ def _get(session: requests.Session, url: str) -> Optional[BeautifulSoup]:
 
 
 def fetch_top_categories(session: requests.Session) -> list[CategoryNode]:
-    soup = _get(session, MAIN_PAGE_URL)
-    if soup is None:
-        return []
-    nodes = _parse_links(soup)
-    logger.info("Fetched %d top-level categories", len(nodes))
-    return nodes
+    """Fetch Yahoo Japan's top-level categories.
+
+    Yahoo's main page is JS-rendered; only the "+条件指定" filter link
+    appears in static HTML. We try a small chain of server-rendered URLs
+    and accept the first one whose parsed result looks healthy
+    (≥ MIN_TOP_CATEGORIES nodes after noise filtering).
+    """
+    best: list[CategoryNode] = []
+    for url in TOP_CATEGORY_URL_CANDIDATES:
+        soup = _get(session, url)
+        if soup is None:
+            continue
+        nodes = _parse_links(soup)
+        logger.debug("Top-category fetch from %s: %d nodes", url, len(nodes))
+        if len(nodes) >= MIN_TOP_CATEGORIES:
+            logger.info("Fetched %d top-level categories from %s", len(nodes), url)
+            return nodes
+        # Keep the largest sub-threshold result as a degraded fallback.
+        if len(nodes) > len(best):
+            best = nodes
+    if best:
+        logger.warning(
+            "All top-category URLs returned < %d nodes; using best (%d).",
+            MIN_TOP_CATEGORIES, len(best),
+        )
+    else:
+        logger.warning("All top-category URLs failed or returned no nodes.")
+    return best
 
 
 def fetch_subcategories(session: requests.Session, cat_id: str) -> list[CategoryNode]:
@@ -153,6 +202,13 @@ def resolve_path(
         if top and cache_path is not None:
             save_cache(top, cache_path)
     if not top:
+        # All live URLs failed (or returned only noise). Fall back to the
+        # static set so well-known paths like `kaiju` still resolve via
+        # fetch_subcategories, which uses the search page and is independent
+        # of the broken main-page DOM.
+        logger.info("resolve_path: live top fetch empty; using _builtin_nodes() fallback.")
+        top = _builtin_nodes()
+    if not top:
         return None
 
     targets = [_normalize(n) for n in walk_names]
@@ -176,14 +232,31 @@ def resolve_path(
     return matched
 
 
+# Extra top-level categories that aren't in config.CATEGORIES but are needed
+# by built-in shortcut paths (e.g. the `kaiju` command). These exist purely
+# as a hedge — if every TOP_CATEGORY_URL_CANDIDATES request fails, name-based
+# resolvers can still find the entry. The leaf walk past this point goes
+# through fetch_subcategories, which uses the search page and is independent
+# of the broken main-page DOM.
+_EXTRA_TOP_NODES = (
+    ("おもちゃ、ゲーム", "26146"),  # path root for `kaiju`
+)
+
+
 def _builtin_nodes() -> list[CategoryNode]:
-    """Static fallback — built-in categories from config.py."""
+    """Static fallback — built-in categories from config.py plus extras."""
     nodes = []
+    seen_ids: set[str] = set()
     for cat in CATEGORIES.values():
         node = CategoryNode(id=cat["id"], name=cat["name_ja"])
         for sub in cat.get("subcategories", {}).values():
             node.children.append(CategoryNode(id=sub["id"], name=sub["name_ja"]))
         nodes.append(node)
+        seen_ids.add(cat["id"])
+    for name, cat_id in _EXTRA_TOP_NODES:
+        if cat_id not in seen_ids:
+            nodes.append(CategoryNode(id=cat_id, name=name))
+            seen_ids.add(cat_id)
     return nodes
 
 
