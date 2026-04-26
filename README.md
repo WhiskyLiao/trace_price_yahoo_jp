@@ -20,7 +20,14 @@ Filters by category, stores history in a local SQLite database, and uses
    cd C:\path\to\trace_price_yahoo_jp
    ```
 
-4. Install dependencies:
+4. Create and activate a virtual environment:
+   ```cmd
+   python -m venv .venv
+   .venv\Scripts\activate
+   ```
+   The prompt will change to `(.venv)` confirming it is active.
+
+5. Install dependencies:
    ```cmd
    pip install -r requirements.txt
    ```
@@ -29,6 +36,8 @@ Filters by category, stores history in a local SQLite database, and uses
 
 ```bash
 cd trace_price_yahoo_jp
+python -m venv .venv
+source .venv/bin/activate
 pip install -r requirements.txt
 ```
 
