@@ -581,31 +581,47 @@ KAIJU_PATH = ["オークショントップ", "おもちゃ、ゲーム", "フィ
               help="Output HTML file path")
 @click.option("--cache", default="categories_cache.json", show_default=True,
               help="Path to local category cache file")
+@click.option("--category-id", default=None,
+              help="Skip path resolution and use this Yahoo category ID directly "
+                   "(escape hatch when the live tree walk fails — find an ID with "
+                   "`python main.py browse`).")
 def kaiju(
     keyword: str,
     pages: int,
     include_closed: bool,
     output: str,
     cache: str,
+    category_id: Optional[str],
 ) -> None:
     """Quick-look: ゴジラ・怪獣 figures → standalone HTML.
 
     Walks Yahoo's live category tree
     (オークショントップ → おもちゃ、ゲーム → フィギュア → 特撮 → ゴジラ、怪獣),
     scrapes the leaf, and writes the result to a self-contained HTML file —
-    no DB, no scheduling.
+    no DB, no scheduling. If path resolution fails, pass --category-id with a
+    leaf ID found via `python main.py browse`.
     """
     pages = max(1, min(pages, 5))
     session = build_session()
     try:
-        click.echo("Resolving category path: " + " › ".join(KAIJU_PATH) + " …")
-        leaf = resolve_path(session, KAIJU_PATH, cache_path=Path(cache))
-        if leaf is None:
-            click.echo(click.style(
-                "Could not resolve the category path against Yahoo's live tree.\n"
-                "Try `python main.py browse` to walk it manually.",
-                fg="red"), err=True)
-            sys.exit(1)
+        if category_id:
+            from yahoo_auction_tracker.category_browser import CategoryNode
+            click.echo(f"Using --category-id: {category_id} (skipping path resolution)")
+            leaf = CategoryNode(id=category_id, name="ゴジラ、怪獣")
+        else:
+            click.echo("Resolving category path: " + " › ".join(KAIJU_PATH) + " …")
+            leaf = resolve_path(session, KAIJU_PATH, cache_path=Path(cache))
+            if leaf is None:
+                click.echo(click.style(
+                    "Could not resolve the category path against Yahoo's live tree.\n"
+                    f"Workarounds:\n"
+                    f"  1. Delete '{cache}' to force a fresh fetch and retry.\n"
+                    "  2. Run `python main.py browse` to find the ゴジラ、怪獣 ID,\n"
+                    "     then re-run with `--category-id <ID>`.\n"
+                    "  3. Run `python main.py -v kaiju` to see verbose diagnostics\n"
+                    "     and share the output for debugging.",
+                    fg="red"), err=True)
+                sys.exit(1)
         click.echo(f"  → leaf: {leaf.name} [{leaf.id}]")
 
         click.echo(f"Fetching active auctions ({pages} page(s))…")
