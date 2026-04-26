@@ -89,7 +89,7 @@ def fetch_page(
     except requests.ConnectionError as exc:
         raise ScraperError(f"Connection error fetching {url}") from exc
     _check_blocked(resp)
-    return BeautifulSoup(resp.text, "lxml")
+    return BeautifulSoup(resp.text, "html.parser")
 
 
 def _parse_yen(text: Optional[str]) -> Optional[int]:
