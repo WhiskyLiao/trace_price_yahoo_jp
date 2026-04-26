@@ -64,6 +64,42 @@ def _resolve_or_exit(category: Optional[str]) -> Optional[str]:
     return cat_id
 
 
+def _prompt_category() -> Optional[str]:
+    """Show a numbered list of top-level categories and return the chosen ID.
+
+    Called when --category is omitted in interactive use. The user can:
+    - Pick a number to select a top-level category
+    - Type a raw category ID or alias directly
+    - Press Enter (or type 0) to search without a category filter
+    - Type 'B' to be reminded to use the 'browse' command for sub-categories
+    """
+    cats = list(CATEGORIES.items())
+    click.echo("\nAvailable top-level categories:")
+    for i, (alias, cat) in enumerate(cats, 1):
+        click.echo(f"  {i:2d}.  {cat['name_ja']}  [{alias}]")
+    click.echo("\n   0.  No category filter (search all)")
+    click.echo("   B.  Browse full sub-category tree  →  run: python main.py browse")
+
+    raw = click.prompt("\nCategory", default="0").strip()
+
+    if raw == "0" or raw == "":
+        return None
+    if raw.upper() == "B":
+        click.echo("Run  python main.py browse  to browse sub-categories, then rerun with --category <ID>.")
+        sys.exit(0)
+    try:
+        idx = int(raw) - 1
+        if 0 <= idx < len(cats):
+            return list(CATEGORIES.values())[idx]["id"]
+    except ValueError:
+        pass
+    # Treat as alias or raw numeric ID
+    result = resolve_category(raw)
+    if result is None:
+        click.echo(f"Unknown category '{raw}', proceeding without category filter.")
+    return result
+
+
 @click.group()
 @click.option("--db", default=None, help="Path to SQLite database (default: auction_tracker.db)")
 @click.option("--verbose", "-v", is_flag=True, help="Enable debug logging")
@@ -155,7 +191,7 @@ def search(
     pages: int,
 ) -> None:
     """Search auctions and display results (does not save to database)."""
-    cat_id = _resolve_or_exit(category)
+    cat_id = _resolve_or_exit(category) if category is not None else _prompt_category()
     pages = max(1, min(pages, 5))
     session = build_session()
     try:
@@ -206,7 +242,7 @@ def search(
 @click.pass_context
 def track(ctx: click.Context, keyword: str, category: Optional[str], no_closed: bool) -> None:
     """Run a one-time update: scrape auctions and save prices to database."""
-    cat_id = _resolve_or_exit(category)
+    cat_id = _resolve_or_exit(category) if category is not None else _prompt_category()
     tracker = AuctionTracker(db_path=ctx.obj["db_path"])
     try:
         result = tracker.run_daily_update(keyword, cat_id, include_closed=not no_closed)
@@ -261,7 +297,7 @@ def report(
 
     Use --format html to generate a standalone HTML report file with a price chart.
     """
-    cat_id = _resolve_or_exit(category)
+    cat_id = _resolve_or_exit(category) if category is not None else _prompt_category()
 
     # Open DB read-only — report never writes
     conn = sqlite3.connect(f"file:{ctx.obj['db_path']}?mode=ro", uri=True)
@@ -380,7 +416,7 @@ def schedule(
         click.echo(click.style("Error: --time must be in HH:MM format", fg="red"), err=True)
         sys.exit(1)
 
-    cat_id = _resolve_or_exit(category)
+    cat_id = _resolve_or_exit(category) if category is not None else _prompt_category()
     tracker = AuctionTracker(db_path=ctx.obj["db_path"])
 
     jst = get_japan_time()
