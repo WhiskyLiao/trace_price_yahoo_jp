@@ -151,10 +151,9 @@ def browse(ctx: click.Context, cache: str) -> None:
 
     The category tree is cached locally for 7 days to avoid repeated fetches.
     """
-    from pathlib import Path as _Path
     session = build_session()
     try:
-        interactive_browse(session, cache_path=_Path(cache))
+        interactive_browse(session, cache_path=Path(cache))
     except (RateLimitError, ScraperError) as exc:
         click.echo(click.style(f"Error: {exc}", fg="red"), err=True)
         sys.exit(1)
@@ -307,16 +306,17 @@ def report(
     """
     cat_id = _resolve_or_exit(category) if category is not None else _prompt_category()
 
-    # Open DB read-only — report never writes
-    conn = sqlite3.connect(f"file:{ctx.obj['db_path']}?mode=ro", uri=True)
+    # Report is read-only by design. If there's no database yet, say so
+    # instead of silently creating one — and let any other OperationalError
+    # surface so corruption / permission issues aren't masked.
+    db_path = ctx.obj["db_path"]
+    if not Path(db_path).exists():
+        click.echo(f"No database at '{db_path}'. Run 'python main.py track' first.")
+        return
+
+    conn = sqlite3.connect(f"file:{db_path}?mode=ro", uri=True)
     conn.row_factory = sqlite3.Row
     try:
-        summary = get_price_summary(conn, keyword, cat_id, days=days)
-        history = get_price_history(conn, keyword, cat_id, days=days)
-    except sqlite3.OperationalError:
-        # DB doesn't exist yet — open normally so we get an empty result
-        conn.close()
-        conn = init_db(ctx.obj["db_path"])
         summary = get_price_summary(conn, keyword, cat_id, days=days)
         history = get_price_history(conn, keyword, cat_id, days=days)
     finally:
@@ -469,14 +469,13 @@ def list_cmd(ctx: click.Context) -> None:
             CATEGORY_ID_TO_NAME.get(s["category_id"] or "", s["category_id"] or "any"),
             s["last_run_at"] or "never",
             s["item_count"],
-            "active" if s["is_active"] else "paused",
         ]
         for s in searches
     ]
     click.echo(
         tabulate(
             rows,
-            headers=["ID", "Keyword", "Category", "Last Run (UTC)", "Items", "Status"],
+            headers=["ID", "Keyword", "Category", "Last Run (UTC)", "Items"],
             tablefmt="rounded_outline",
         )
     )
@@ -493,9 +492,12 @@ def delete(ctx: click.Context, search_id: int) -> None:
     """Delete a tracked search and all its history by ID."""
     conn = init_db(ctx.obj["db_path"])
     try:
-        delete_search(conn, search_id)
+        removed = delete_search(conn, search_id)
     finally:
         conn.close()
+    if removed == 0:
+        click.echo(click.style(f"No search with ID {search_id} found.", fg="red"), err=True)
+        sys.exit(1)
     click.echo(f"Deleted search ID {search_id} and all associated data.")
 
 

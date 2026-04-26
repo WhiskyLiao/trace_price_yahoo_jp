@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import sqlite3
 import statistics
+from collections import defaultdict
 from datetime import date, timedelta
 from typing import Optional
 
@@ -97,7 +98,11 @@ def save_items(
     snapshot_date: Optional[str] = None,
 ) -> tuple[int, int]:
     if snapshot_date is None:
-        snapshot_date = date.today().isoformat()
+        # Default to JST so daily snapshots match the date in Japan even when
+        # the host clock is in a different timezone. Imported lazily to avoid
+        # a circular import (tracker imports database).
+        from .tracker import get_japan_date_str
+        snapshot_date = get_japan_date_str()
 
     inserted = updated = 0
     with conn:
@@ -201,15 +206,25 @@ def get_price_summary(
     *,
     days: int = 30,
 ) -> dict:
-    rows = get_price_history(conn, keyword, _cat(category_id), days=days)
+    rows = get_price_history(conn, keyword, category_id, days=days)
     prices = [r["current_price"] for r in rows if r["current_price"] is not None]
     bids = [r["bid_count"] for r in rows if r["bid_count"] is not None]
 
+    # Trend is computed on per-date average prices, not on the raw row list.
+    # The raw rows are ordered by item_id then date, so slicing them in half
+    # would split by item rather than by time and skew the result toward
+    # whichever items happen to be cheaper.
+    daily: dict[str, list[int]] = defaultdict(list)
+    for r in rows:
+        if r["current_price"] is not None:
+            daily[r["snapshot_date"]].append(r["current_price"])
+    daily_avgs = [sum(v) / len(v) for _, v in sorted(daily.items())]
+
     trend = "insufficient_data"
-    if len(prices) >= 4:
-        mid = len(prices) // 2
-        first_avg = statistics.mean(prices[:mid])
-        second_avg = statistics.mean(prices[mid:])
+    if len(daily_avgs) >= 4:
+        mid = len(daily_avgs) // 2
+        first_avg = statistics.mean(daily_avgs[:mid])
+        second_avg = statistics.mean(daily_avgs[mid:])
         diff_pct = (second_avg - first_avg) / first_avg if first_avg else 0
         if diff_pct > 0.03:
             trend = "up"
@@ -236,7 +251,7 @@ def get_price_summary(
 def list_searches(conn: sqlite3.Connection) -> list[sqlite3.Row]:
     return conn.execute(
         """
-        SELECT s.id, s.keyword, s.category_id, s.last_run_at, s.is_active,
+        SELECT s.id, s.keyword, s.category_id, s.last_run_at,
                COUNT(DISTINCT i.item_id) AS item_count
         FROM searches s
         LEFT JOIN items i ON i.search_id = s.id
@@ -246,6 +261,8 @@ def list_searches(conn: sqlite3.Connection) -> list[sqlite3.Row]:
     ).fetchall()
 
 
-def delete_search(conn: sqlite3.Connection, search_id: int) -> None:
+def delete_search(conn: sqlite3.Connection, search_id: int) -> int:
+    """Delete a search row by id and return the number of rows removed."""
     with conn:
-        conn.execute("DELETE FROM searches WHERE id = ?", (search_id,))
+        cur = conn.execute("DELETE FROM searches WHERE id = ?", (search_id,))
+    return cur.rowcount

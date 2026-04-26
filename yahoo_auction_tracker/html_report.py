@@ -148,9 +148,9 @@ def generate_html(
       }});
     </script>"""
 
-    avg_str = _fmt_yen(int(summary["avg_price"])) if summary["avg_price"] else "—"
-    median_str = _fmt_yen(int(summary["median_price"])) if summary["median_price"] else "—"
-    avg_bids = summary["avg_bid_count"] or "—"
+    avg_str = _fmt_yen(int(summary["avg_price"])) if summary["avg_price"] is not None else "—"
+    median_str = _fmt_yen(int(summary["median_price"])) if summary["median_price"] is not None else "—"
+    avg_bids = summary["avg_bid_count"] if summary["avg_bid_count"] is not None else "—"
 
     return f"""<!DOCTYPE html>
 <html lang="en">
