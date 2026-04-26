@@ -34,8 +34,8 @@ from yahoo_auction_tracker.scraper import (
     search_active,
     search_closed,
 )
-from yahoo_auction_tracker.category_browser import interactive_browse, lookup_live_id
-from yahoo_auction_tracker.html_report import generate_html
+from yahoo_auction_tracker.category_browser import interactive_browse, lookup_live_id, resolve_path
+from yahoo_auction_tracker.html_report import generate_html, generate_items_html
 from yahoo_auction_tracker.tracker import AuctionTracker, get_japan_time
 
 
@@ -561,6 +561,79 @@ def delete(ctx: click.Context, search_id: int) -> None:
         click.echo(click.style(f"No search with ID {search_id} found.", fg="red"), err=True)
         sys.exit(1)
     click.echo(f"Deleted search ID {search_id} and all associated data.")
+
+
+# ---------------------------------------------------------------------------
+# kaiju — shortcut: scrape Godzilla/Kaiju figures and dump to HTML
+# ---------------------------------------------------------------------------
+
+# Path on Yahoo Japan Auctions:
+#   オークショントップ → おもちゃ、ゲーム → フィギュア → 特撮 → ゴジラ、怪獣
+KAIJU_PATH = ["おもちゃ、ゲーム", "フィギュア", "特撮", "ゴジラ、怪獣"]
+
+
+@cli.command()
+@click.option("--keyword", "-k", default="", help="Optional keyword to narrow within the category")
+@click.option("--pages", default=2, show_default=True, help="Pages to fetch (1–5)")
+@click.option("--include-closed", is_flag=True, default=False,
+              help="Also include closed/sold auctions")
+@click.option("--output", "-o", default="kaiju_report.html", show_default=True,
+              help="Output HTML file path")
+@click.option("--cache", default="categories_cache.json", show_default=True,
+              help="Path to local category cache file")
+def kaiju(
+    keyword: str,
+    pages: int,
+    include_closed: bool,
+    output: str,
+    cache: str,
+) -> None:
+    """Quick-look: ゴジラ・怪獣 figures → standalone HTML.
+
+    Walks Yahoo's live category tree
+    (オークショントップ → おもちゃ、ゲーム → フィギュア → 特撮 → ゴジラ、怪獣),
+    scrapes the leaf, and writes the result to a self-contained HTML file —
+    no DB, no scheduling.
+    """
+    pages = max(1, min(pages, 5))
+    session = build_session()
+    try:
+        click.echo("Resolving category path: " + " › ".join(KAIJU_PATH) + " …")
+        leaf = resolve_path(session, KAIJU_PATH, cache_path=Path(cache))
+        if leaf is None:
+            click.echo(click.style(
+                "Could not resolve the category path against Yahoo's live tree.\n"
+                "Try `python main.py browse` to walk it manually.",
+                fg="red"), err=True)
+            sys.exit(1)
+        click.echo(f"  → leaf: {leaf.name} [{leaf.id}]")
+
+        click.echo(f"Fetching active auctions ({pages} page(s))…")
+        try:
+            items = search_active(session, keyword, leaf.id, max_pages=pages)
+            if include_closed:
+                click.echo(f"Fetching closed auctions ({pages} page(s))…")
+                items = items + search_closed(session, keyword, leaf.id, max_pages=pages)
+        except RateLimitError as exc:
+            click.echo(click.style(f"Rate limit: {exc}", fg="red"), err=True)
+            sys.exit(1)
+        except ScraperError as exc:
+            click.echo(click.style(f"Scraper error: {exc}", fg="red"), err=True)
+            sys.exit(1)
+    finally:
+        session.close()
+
+    full_path = ["オークショントップ", *KAIJU_PATH]
+    html_doc = generate_items_html(
+        items,
+        title=f"ゴジラ・怪獣 — {len(items)} items",
+        category_path=full_path,
+        category_id=leaf.id,
+        keyword=keyword or None,
+    )
+    out = Path(output)
+    out.write_text(html_doc, encoding="utf-8")
+    click.echo(f"Saved {len(items)} items to: {out.resolve()}")
 
 
 if __name__ == "__main__":

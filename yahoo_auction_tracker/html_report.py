@@ -277,3 +277,145 @@ def generate_html(
   {chart_script}
 </body>
 </html>"""
+
+
+def generate_items_html(
+    items: list,
+    *,
+    title: str,
+    category_path: list[str],
+    category_id: Optional[str] = None,
+    keyword: Optional[str] = None,
+    generated_at: Optional[str] = None,
+) -> str:
+    """Render a one-shot, standalone HTML page listing scraped AuctionItem rows.
+
+    Used by category-shortcut commands (e.g. `kaiju`) where the goal is a
+    point-in-time snapshot of items, not a price-history report.
+    """
+    if generated_at is None:
+        generated_at = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+
+    breadcrumb = " › ".join(html.escape(p) for p in category_path) if category_path else "—"
+    cat_id_label = html.escape(category_id) if category_id else "—"
+    kw_label = html.escape(keyword) if keyword else "(all items)"
+
+    prices = [it.current_price for it in items if it.current_price is not None]
+    bids = [it.bid_count for it in items if it.bid_count is not None]
+    closed_count = sum(1 for it in items if getattr(it, "is_closed", False))
+
+    stat_total = len(items)
+    stat_min = _fmt_yen(min(prices)) if prices else "—"
+    stat_max = _fmt_yen(max(prices)) if prices else "—"
+    stat_avg = _fmt_yen(round(sum(prices) / len(prices))) if prices else "—"
+    stat_avg_bids = round(sum(bids) / len(bids), 1) if bids else "—"
+    stat_closed = closed_count
+
+    rows_html = ""
+    for it in items:
+        esc_title = html.escape(it.title or "")
+        esc_url = html.escape(it.item_url or "#")
+        rows_html += f"""
+        <tr>
+          <td class="title-cell"><a href="{esc_url}" target="_blank" rel="noopener">{esc_title}</a></td>
+          <td class="num">{_fmt_yen(it.current_price)}</td>
+          <td class="num">{_fmt_yen(it.buynow_price)}</td>
+          <td class="num">{it.bid_count or 0}</td>
+          <td>{html.escape(it.time_remaining or "—")}</td>
+          <td>{_condition_badge(it.condition)}</td>
+          <td>{_status_badge(1 if getattr(it, "is_closed", False) else 0)}</td>
+        </tr>"""
+
+    no_data = "" if items else '<p class="no-data">No items found.</p>'
+    table_open = '<div style="overflow-x:auto"><table>' if items else ""
+    thead = (
+        '<thead><tr><th>Title</th><th class="num">Price</th><th class="num">Buy-Now</th>'
+        '<th class="num">Bids</th><th>Time Left</th><th>Condition</th><th>Status</th></tr>'
+        '</thead><tbody>'
+    ) if items else ""
+    table_close = "</tbody></table></div>" if items else ""
+
+    return f"""<!DOCTYPE html>
+<html lang="ja">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>{html.escape(title)}</title>
+  <style>
+    *, *::before, *::after {{ box-sizing: border-box; margin: 0; padding: 0; }}
+    body {{
+      font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", "Hiragino Sans",
+                   "Yu Gothic", Meiryo, sans-serif;
+      background: #f8fafc;
+      color: #1e293b;
+      padding: 2rem 1rem;
+    }}
+    .container {{ max-width: 1200px; margin: 0 auto; }}
+    header {{ margin-bottom: 1.5rem; }}
+    header h1 {{ font-size: 1.75rem; font-weight: 700; color: #0f172a; }}
+    header .breadcrumb {{ color: #64748b; margin-top: .35rem; font-size: .95rem; }}
+    header .meta {{ color: #94a3b8; margin-top: .35rem; font-size: .85rem; }}
+    .stats-grid {{
+      display: grid;
+      grid-template-columns: repeat(auto-fit, minmax(140px, 1fr));
+      gap: 1rem;
+      margin-bottom: 1.5rem;
+    }}
+    .stat {{
+      background: #fff; border: 1px solid #e2e8f0; border-radius: 12px;
+      padding: 1rem 1.15rem;
+    }}
+    .stat .label {{ font-size: .72rem; font-weight: 600; text-transform: uppercase;
+                    letter-spacing: .05em; color: #94a3b8; margin-bottom: .25rem; }}
+    .stat .value {{ font-size: 1.3rem; font-weight: 700; color: #0f172a; }}
+    .stat .value.yen {{ color: #2563eb; }}
+    .card {{ background: #fff; border: 1px solid #e2e8f0; border-radius: 12px;
+             padding: 1.25rem; }}
+    table {{ width: 100%; border-collapse: collapse; font-size: .875rem; }}
+    thead tr {{ background: #f1f5f9; }}
+    th {{ text-align: left; padding: .65rem .9rem; font-size: .72rem; font-weight: 600;
+          text-transform: uppercase; letter-spacing: .05em; color: #64748b;
+          white-space: nowrap; }}
+    td {{ padding: .55rem .9rem; border-bottom: 1px solid #f1f5f9; vertical-align: middle; }}
+    tr:last-child td {{ border-bottom: none; }}
+    tr:hover td {{ background: #f8fafc; }}
+    td.num {{ text-align: right; font-variant-numeric: tabular-nums; white-space: nowrap; }}
+    td.title-cell {{ max-width: 460px; }}
+    td.title-cell a {{ color: #2563eb; text-decoration: none; display: block;
+                       white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }}
+    td.title-cell a:hover {{ text-decoration: underline; }}
+    .no-data {{ color: #94a3b8; font-style: italic; padding: 1rem 0; }}
+    footer {{ text-align: center; color: #94a3b8; font-size: .8rem; margin-top: 2rem; }}
+    @media (max-width: 640px) {{ td.title-cell {{ max-width: 200px; }} }}
+  </style>
+</head>
+<body>
+  <div class="container">
+    <header>
+      <h1>{html.escape(title)}</h1>
+      <p class="breadcrumb">{breadcrumb}</p>
+      <p class="meta">Category ID: {cat_id_label} &nbsp;·&nbsp; Keyword: {kw_label} &nbsp;·&nbsp;
+         Generated: {html.escape(generated_at)}</p>
+    </header>
+
+    <div class="stats-grid">
+      <div class="stat"><div class="label">Items</div><div class="value">{stat_total}</div></div>
+      <div class="stat"><div class="label">Min Price</div><div class="value yen">{stat_min}</div></div>
+      <div class="stat"><div class="label">Max Price</div><div class="value yen">{stat_max}</div></div>
+      <div class="stat"><div class="label">Avg Price</div><div class="value yen">{stat_avg}</div></div>
+      <div class="stat"><div class="label">Avg Bids</div><div class="value">{stat_avg_bids}</div></div>
+      <div class="stat"><div class="label">Closed</div><div class="value">{stat_closed}</div></div>
+    </div>
+
+    <div class="card">
+      {no_data}
+      {table_open}
+      {thead}
+      {rows_html}
+      {table_close}
+    </div>
+
+    <footer>Yahoo Japan Auction Price Tracker &nbsp;·&nbsp; Data sourced from auctions.yahoo.co.jp</footer>
+  </div>
+</body>
+</html>"""

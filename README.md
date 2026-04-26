@@ -254,6 +254,7 @@ You can also pass a raw numeric category ID: `--category 2084030018`
 | `delete <ID>`     | Remove a search and all its history                      |
 | `list-categories` | Show built-in category aliases and IDs                   |
 | `japan-time`      | Display current JST from worldtimeapi.org                |
+| `kaiju`           | Shortcut: scrape Godzilla/Kaiju figures → standalone HTML |
 
 `--keyword` / `-k` can be omitted from any command — you will be prompted to enter it interactively.
 
@@ -267,6 +268,50 @@ python main.py report --format html
 
 Generates a standalone `.html` file with a price chart and history table.  
 Open it in any browser — no server or internet required to view the table.
+
+---
+
+## Quick Category: ゴジラ・怪獣
+
+A built-in shortcut that walks the live Yahoo Japan category tree
+
+```
+オークショントップ → おもちゃ、ゲーム → フィギュア → 特撮 → ゴジラ、怪獣
+```
+
+scrapes the leaf, and writes a self-contained HTML file — no DB, no
+scheduling, one command:
+
+```cmd
+python main.py kaiju
+```
+
+Output goes to `kaiju_report.html` in the current directory by default.
+Useful flags:
+
+| Flag                | Default              | Purpose                                   |
+|---------------------|----------------------|-------------------------------------------|
+| `-k` / `--keyword`  | (empty — all items)  | Narrow within the category                |
+| `--pages`           | `2`                  | Pages to fetch (1–5)                      |
+| `--include-closed`  | off                  | Also include sold auctions                |
+| `-o` / `--output`   | `kaiju_report.html`  | Output file path                          |
+
+Examples:
+
+```cmd
+:: All items, 2 pages
+python main.py kaiju
+
+:: Only "ソフビ" within the category, 5 pages, save elsewhere
+python main.py kaiju -k ソフビ --pages 5 -o sofubi.html
+
+:: Include sold listings
+python main.py kaiju --include-closed
+```
+
+The path is resolved against the live tree on every run, so no static IDs
+to maintain — if Yahoo rotates the leaf, the next run picks up the new ID
+automatically.
 
 ---
 

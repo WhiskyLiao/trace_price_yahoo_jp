@@ -105,6 +105,56 @@ def fetch_subcategories(session: requests.Session, cat_id: str) -> list[Category
     return nodes
 
 
+def _normalize(name: str) -> str:
+    """Match category names tolerantly: drop whitespace, treat ・ and 、 alike."""
+    return name.replace("・", "、").replace(" ", "").replace("　", "").strip()
+
+
+def resolve_path(
+    session: requests.Session,
+    names: list[str],
+    *,
+    cache_path: Optional[Path] = None,
+) -> Optional[CategoryNode]:
+    """Walk Yahoo Japan's live category tree top -> leaf by Japanese name.
+
+    Returns the leaf CategoryNode (with .id and .name) or None on miss.
+    Comparisons normalize ・ vs 、 and ignore whitespace, so callers can
+    spell paths either way.
+    """
+    if not names:
+        return None
+
+    # Use cached top-level if present and fresh, otherwise fetch live.
+    top = load_cache(cache_path) if cache_path else None
+    if top is None:
+        top = fetch_top_categories(session)
+        if top and cache_path is not None:
+            save_cache(top, cache_path)
+    if not top:
+        return None
+
+    targets = [_normalize(n) for n in names]
+    current_list = top
+    matched: Optional[CategoryNode] = None
+
+    for depth, target in enumerate(targets):
+        match = next((n for n in current_list if _normalize(n.name) == target), None)
+        if match is None:
+            logger.warning(
+                "resolve_path: no match for %r at depth %d (candidates: %s)",
+                names[depth], depth, [n.name for n in current_list][:8],
+            )
+            return None
+        matched = match
+        if depth < len(targets) - 1:
+            current_list = fetch_subcategories(session, match.id)
+            if not current_list:
+                return None
+
+    return matched
+
+
 def _builtin_nodes() -> list[CategoryNode]:
     """Static fallback — built-in categories from config.py."""
     nodes = []
