@@ -113,7 +113,7 @@ def japan_time_cmd() -> None:
 # ---------------------------------------------------------------------------
 
 @cli.command()
-@click.option("--keyword", "-k", required=True, help="Search keyword")
+@click.option("--keyword", "-k", default=None, prompt="Search keyword", help="Search keyword")
 @click.option("--category", "-c", default=None, help="Category alias or numeric ID")
 @click.option("--closed", is_flag=True, default=False, help="Search closed/sold auctions")
 @click.option("--pages", default=2, show_default=True, help="Pages to fetch (1–5)")
@@ -171,7 +171,7 @@ def search(
 # ---------------------------------------------------------------------------
 
 @cli.command()
-@click.option("--keyword", "-k", required=True)
+@click.option("--keyword", "-k", default=None, prompt="Search keyword")
 @click.option("--category", "-c", default=None, help="Category alias or numeric ID")
 @click.option("--no-closed", is_flag=True, default=False, help="Skip closed auction search")
 @click.pass_context
@@ -206,7 +206,7 @@ def track(ctx: click.Context, keyword: str, category: Optional[str], no_closed: 
 # ---------------------------------------------------------------------------
 
 @cli.command()
-@click.option("--keyword", "-k", required=True)
+@click.option("--keyword", "-k", default=None, prompt="Search keyword")
 @click.option("--category", "-c", default=None)
 @click.option("--days", default=30, show_default=True, help="Number of days of history to show")
 @click.option(
@@ -329,7 +329,7 @@ def report(
 # ---------------------------------------------------------------------------
 
 @cli.command()
-@click.option("--keyword", "-k", required=True)
+@click.option("--keyword", "-k", default=None, prompt="Search keyword")
 @click.option("--category", "-c", default=None)
 @click.option("--time", "run_time", default="09:00", show_default=True,
               help="Daily run time HH:MM in Japan Standard Time")
