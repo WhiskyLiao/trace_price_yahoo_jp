@@ -4,36 +4,123 @@ Daily price tracking for Yahoo Japan Auctions (auctions.yahoo.co.jp).
 Filters by category, stores history in a local SQLite database, and uses
 **worldtimeapi.org** to fetch accurate Japan Standard Time for daily snapshots.
 
+---
+
 ## Installation
 
+### Windows
+
+1. Download and install Python 3.11+ from [python.org](https://www.python.org/downloads/)  
+   ⚠️ During installation, check **"Add Python to PATH"**
+
+2. Open **Command Prompt** (`Win + R` → type `cmd` → Enter)
+
+3. Navigate to the project folder:
+   ```cmd
+   cd C:\path\to\trace_price_yahoo_jp
+   ```
+
+4. Install dependencies:
+   ```cmd
+   pip install -r requirements.txt
+   ```
+
+### macOS / Linux
+
 ```bash
+cd trace_price_yahoo_jp
 pip install -r requirements.txt
 ```
 
+---
+
 ## Quick Start
 
+Keyword can be typed interactively — just run a command without `--keyword` and you will be prompted:
+
+```
+Search keyword: カメラ
+```
+
+Or pass it directly on the command line:
+
+**Windows (Command Prompt):**
+```cmd
+:: Search without saving (preview)
+python main.py search --category cameras
+
+:: Track once (scrape + save to DB)
+python main.py track --category cameras
+
+:: Generate HTML report
+python main.py report --format html
+
+:: Schedule daily tracking at 09:00 JST
+python main.py schedule --time 09:00 --run-now
+
+:: Export history as CSV
+python main.py report --format csv --output prices.csv
+
+:: List all tracked searches
+python main.py list
+
+:: Show current Japan time
+python main.py japan-time
+```
+
+**macOS / Linux:**
 ```bash
 # Search without saving (preview)
-python main.py search --keyword "Nintendo Switch" --category nintendo_switch
+python main.py search --category cameras
 
 # Track once (scrape + save to DB)
-python main.py track --keyword "Nintendo Switch" --category games
+python main.py track --category cameras
 
-# View price history and trend
-python main.py report --keyword "Nintendo Switch" --days 30
+# Generate HTML report
+python main.py report --format html
 
-# Schedule daily tracking at 09:00 JST (runs once immediately then daily)
-python main.py schedule --keyword "Nintendo Switch" --category games --time 09:00 --run-now
+# Schedule daily tracking at 09:00 JST
+python main.py schedule --time 09:00 --run-now
 
 # Export history as CSV
-python main.py report --keyword "Nintendo Switch" --format csv > prices.csv
+python main.py report --format csv > prices.csv
 
 # List all tracked searches
 python main.py list
 
-# Show current Japan time (fetched from worldtimeapi.org)
+# Show current Japan time
 python main.py japan-time
 ```
+
+---
+
+## Scheduling Daily Updates
+
+### Windows — Task Scheduler
+
+1. Open **Task Scheduler** (search in Start Menu)
+2. Click **Create Basic Task** on the right panel
+3. Fill in the settings:
+
+| Field | Value |
+|-------|-------|
+| Name | Auction Price Tracker |
+| Trigger | Daily |
+| Time | 09:00 (note: JST = UTC+9, adjust if your PC clock is not JST) |
+| Action | Start a program |
+| Program | `C:\path\to\trace_price_yahoo_jp\.venv\Scripts\python.exe` (or just `python`) |
+| Arguments | `main.py track --category cameras` |
+| Start in | `C:\path\to\trace_price_yahoo_jp` |
+
+### macOS / Linux — cron
+
+```bash
+crontab -e
+# Add (runs at 09:00 JST — adjust hour for your server timezone):
+0 9 * * * cd /path/to/trace_price_yahoo_jp && python main.py track >> tracker.log 2>&1
+```
+
+---
 
 ## Category Aliases
 
@@ -43,19 +130,25 @@ python main.py list-categories
 
 | Alias            | Japanese Name              |
 |------------------|----------------------------|
-| electronics      | パソコン・周辺機器           |
+| electronics      | パソコン・周辺機器          |
+| laptops          | ノートPC                   |
+| desktop          | デスクトップPC              |
 | games            | テレビゲーム                |
-| nintendo_switch  | Nintendo Switch            |
-| ps5              | PlayStation 5              |
-| ps4              | PlayStation 4              |
+| nintendo_switch  | 任天堂スイッチ              |
+| ps5              | プレイステーション5          |
+| ps4              | プレイステーション4          |
 | cameras          | カメラ・光学機器            |
+| dslr             | デジタル一眼レフカメラ       |
+| mirrorless       | ミラーレス一眼              |
 | watches          | 時計                       |
 | clothing         | ファッション                |
-| toys             | おもちゃ・ホビー・グッズ    |
-| sports           | スポーツ・レジャー          |
+| toys             | おもちゃ・ホビー・グッズ     |
+| sports           | スポーツ・レジャー           |
 | cars             | 自動車・バイク              |
 
 You can also pass a raw numeric category ID: `--category 2084030018`
+
+---
 
 ## CLI Reference
 
@@ -67,13 +160,51 @@ You can also pass a raw numeric category ID: `--category 2084030018`
 | `schedule`        | Schedule daily tracking (blocks, Ctrl+C to stop) |
 | `list`            | List all tracked searches                        |
 | `delete <ID>`     | Remove a search and all its history              |
-| `list-categories` | Show category aliases                            |
+| `list-categories` | Show category aliases and IDs                    |
 | `japan-time`      | Display current JST from worldtimeapi.org        |
+
+`--keyword` / `-k` can be omitted from any command — you will be prompted to enter it interactively.
+
+---
+
+## HTML Report
+
+```cmd
+python main.py report --format html
+```
+
+Generates a standalone `.html` file with a price chart and history table.  
+Open it in any browser — no server or internet required to view the table.
+
+---
 
 ## Database
 
 Data is stored in `auction_tracker.db` (SQLite) in the current directory.  
-Use `--db /path/to/custom.db` to specify a different path.
+Use `--db C:\path\to\custom.db` to specify a different path.
+
+**Backup (Windows):**
+```cmd
+copy auction_tracker.db auction_tracker_backup.db
+```
+
+**Backup (macOS / Linux):**
+```bash
+cp auction_tracker.db auction_tracker_backup_$(date +%Y%m%d).db
+```
+
+---
+
+## Windows Troubleshooting
+
+| Problem | Solution |
+|---------|----------|
+| `python` not found | Reinstall Python and check "Add Python to PATH" |
+| Chinese/Japanese characters show as `?` | Run `chcp 65001` in Command Prompt before starting |
+| `pip install` fails with permission error | Run Command Prompt as Administrator, or use `pip install --user -r requirements.txt` |
+| Firewall blocks requests | Allow Python through Windows Defender Firewall |
+
+---
 
 ## Notes
 
