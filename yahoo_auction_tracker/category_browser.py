@@ -105,6 +105,56 @@ def fetch_subcategories(session: requests.Session, cat_id: str) -> list[Category
     return nodes
 
 
+def _normalize(name: str) -> str:
+    """Match category names tolerantly: drop whitespace, treat ・ and 、 alike."""
+    return name.replace("・", "、").replace(" ", "").replace("　", "").strip()
+
+
+def resolve_path(
+    session: requests.Session,
+    names: list[str],
+    *,
+    cache_path: Optional[Path] = None,
+) -> Optional[CategoryNode]:
+    """Walk Yahoo Japan's live category tree top -> leaf by Japanese name.
+
+    Returns the leaf CategoryNode (with .id and .name) or None on miss.
+    Comparisons normalize ・ vs 、 and ignore whitespace, so callers can
+    spell paths either way.
+    """
+    if not names:
+        return None
+
+    # Use cached top-level if present and fresh, otherwise fetch live.
+    top = load_cache(cache_path) if cache_path else None
+    if top is None:
+        top = fetch_top_categories(session)
+        if top and cache_path is not None:
+            save_cache(top, cache_path)
+    if not top:
+        return None
+
+    targets = [_normalize(n) for n in names]
+    current_list = top
+    matched: Optional[CategoryNode] = None
+
+    for depth, target in enumerate(targets):
+        match = next((n for n in current_list if _normalize(n.name) == target), None)
+        if match is None:
+            logger.warning(
+                "resolve_path: no match for %r at depth %d (candidates: %s)",
+                names[depth], depth, [n.name for n in current_list][:8],
+            )
+            return None
+        matched = match
+        if depth < len(targets) - 1:
+            current_list = fetch_subcategories(session, match.id)
+            if not current_list:
+                return None
+
+    return matched
+
+
 def _builtin_nodes() -> list[CategoryNode]:
     """Static fallback — built-in categories from config.py."""
     nodes = []
@@ -142,6 +192,78 @@ def save_cache(nodes: list[CategoryNode], path: Path) -> None:
         )
     except Exception as exc:
         logger.warning("Failed to save category cache: %s", exc)
+
+
+def _normalize_name(name: str) -> str:
+    """Loose normalization so live and static names compare equal across
+    punctuation differences (・ vs 、 vs ／, full/half-width spaces)."""
+    out = name
+    for ch in "・、／/ 　":
+        out = out.replace(ch, "")
+    return out.strip().lower()
+
+
+def _find_in_tree(nodes: list[CategoryNode], name_ja: str) -> Optional[CategoryNode]:
+    target = _normalize_name(name_ja)
+    for n in nodes:
+        if _normalize_name(n.name) == target:
+            return n
+        hit = _find_in_tree(n.children, name_ja)
+        if hit:
+            return hit
+    return None
+
+
+def get_top_categories(
+    session: requests.Session,
+    cache_path: Path,
+    *,
+    force_refresh: bool = False,
+) -> list[CategoryNode]:
+    """Return the top-level category list, refreshing the cache if stale or missing."""
+    if not force_refresh:
+        cached = load_cache(cache_path)
+        if cached is not None:
+            return cached
+    nodes = fetch_top_categories(session)
+    if nodes:
+        save_cache(nodes, cache_path)
+    return nodes
+
+
+def lookup_live_id(
+    session: requests.Session,
+    name_ja: str,
+    cache_path: Path,
+    *,
+    parent_name_ja: Optional[str] = None,
+) -> Optional[str]:
+    """Look up the current live category ID for a Japanese category name.
+
+    For top-level aliases, searches the cached top-level tree (refreshing if
+    stale). For sub-aliases, also fetches the parent's subcategories on-demand
+    and caches them under the parent node so the next call is offline.
+    """
+    top = get_top_categories(session, cache_path)
+    if not top:
+        return None
+
+    # Top-level lookup
+    if parent_name_ja is None:
+        node = _find_in_tree(top, name_ja)
+        return node.id if node else None
+
+    # Sub-category lookup: find parent node first
+    parent = _find_in_tree(top, parent_name_ja)
+    if parent is None:
+        return None
+    # Drill down: prefer cached children, otherwise fetch and cache
+    if not parent.children:
+        parent.children = fetch_subcategories(session, parent.id)
+        if parent.children:
+            save_cache(top, cache_path)
+    node = _find_in_tree(parent.children, name_ja)
+    return node.id if node else None
 
 
 def interactive_browse(

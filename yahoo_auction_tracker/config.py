@@ -95,6 +95,41 @@ def resolve_category(name_or_id: str | None) -> str | None:
     return None
 
 
+def get_name_ja(alias: str) -> str | None:
+    """Return the Japanese display name for a top-level or sub-category alias.
+
+    Used by the live-lookup path to find a category by name on the live
+    Yahoo Japan tree when the static ID has gone stale.
+    """
+    if not alias:
+        return None
+    if alias in CATEGORIES:
+        return CATEGORIES[alias]["name_ja"]
+    parts = alias.split("/")
+    if len(parts) == 2:
+        parent, child = parts
+        if parent in CATEGORIES and child in CATEGORIES[parent].get("subcategories", {}):
+            return CATEGORIES[parent]["subcategories"][child]["name_ja"]
+    for cat in CATEGORIES.values():
+        subs = cat.get("subcategories", {})
+        if alias in subs:
+            return subs[alias]["name_ja"]
+    return None
+
+
+def get_parent_alias(sub_alias: str) -> str | None:
+    """Return the parent alias for a sub-category alias, or None."""
+    if not sub_alias:
+        return None
+    parts = sub_alias.split("/")
+    if len(parts) == 2 and parts[0] in CATEGORIES:
+        return parts[0]
+    for parent_alias, cat in CATEGORIES.items():
+        if sub_alias in cat.get("subcategories", {}):
+            return parent_alias
+    return None
+
+
 DEFAULT_SETTINGS: dict = {
     "request_delay_seconds": 1.5,
     "items_per_page": 50,

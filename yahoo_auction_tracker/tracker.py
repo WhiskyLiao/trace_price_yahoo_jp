@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import logging
 from datetime import datetime, timezone
-from typing import Optional
+from typing import Callable, Optional
 from zoneinfo import ZoneInfo
 
 import requests
@@ -142,21 +142,31 @@ class AuctionTracker:
         run_time: str = "09:00",
         include_closed: bool = True,
         run_now: bool = False,
+        resolve_category_id: Optional[Callable[[], Optional[str]]] = None,
     ) -> None:
+        """Schedule a daily run of `run_daily_update`.
+
+        If `resolve_category_id` is provided, it is called before each run
+        (including `run_now`) to obtain the current category ID — letting
+        callers refresh a stale alias against the live Yahoo Japan tree on
+        every run rather than just at scheduling time.
+        """
         from apscheduler.schedulers.blocking import BlockingScheduler
         from apscheduler.triggers.cron import CronTrigger
 
+        def _job() -> dict:
+            cid = resolve_category_id() if resolve_category_id else category_id
+            return self.run_daily_update(keyword, cid, include_closed=include_closed)
+
         if run_now:
             logger.info("Running immediate update before scheduling...")
-            self.run_daily_update(keyword, category_id, include_closed=include_closed)
+            _job()
 
         hour, minute = run_time.split(":")
         scheduler = BlockingScheduler(timezone=JST)
         scheduler.add_job(
-            self.run_daily_update,
+            _job,
             CronTrigger(hour=int(hour), minute=int(minute), timezone=JST),
-            args=[keyword, category_id],
-            kwargs={"include_closed": include_closed},
             id="daily_update",
             name=f"Daily update: {keyword}",
             max_instances=1,

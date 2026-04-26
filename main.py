@@ -15,6 +15,8 @@ from yahoo_auction_tracker.config import (
     CATEGORIES,
     DEFAULT_SETTINGS,
     CATEGORY_ID_TO_NAME,
+    get_name_ja,
+    get_parent_alias,
     resolve_category,
 )
 from yahoo_auction_tracker.database import (
@@ -32,8 +34,8 @@ from yahoo_auction_tracker.scraper import (
     search_active,
     search_closed,
 )
-from yahoo_auction_tracker.category_browser import interactive_browse
-from yahoo_auction_tracker.html_report import generate_html
+from yahoo_auction_tracker.category_browser import interactive_browse, lookup_live_id, resolve_path
+from yahoo_auction_tracker.html_report import generate_html, generate_items_html
 from yahoo_auction_tracker.tracker import AuctionTracker, get_japan_time
 
 
@@ -62,6 +64,54 @@ def _resolve_or_exit(category: Optional[str]) -> Optional[str]:
         )
         sys.exit(1)
     return cat_id
+
+
+def _refresh_alias_id(
+    category: Optional[str],
+    static_id: Optional[str],
+    *,
+    cache_path: str = "categories_cache.json",
+) -> Optional[str]:
+    """If `category` is an alias (not a numeric ID), refresh its ID against the
+    live Yahoo Japan tree and return the current ID. Falls back to `static_id`
+    on any lookup failure so a network blip never blocks a search.
+
+    The lookup uses the local `categories_cache.json` (auto-refreshed when
+    older than 7 days) so the cost on the warm path is a single file read.
+    """
+    if not category or not static_id:
+        return static_id
+    if category.isdigit():
+        return static_id
+    name_ja = get_name_ja(category)
+    if not name_ja:
+        return static_id
+    parent_alias = get_parent_alias(category)
+    parent_name_ja = get_name_ja(parent_alias) if parent_alias and parent_alias != category else None
+    try:
+        # Late import keeps category_browser's requests/bs4 deps off the cold path
+        from yahoo_auction_tracker.scraper import build_session
+        session = build_session()
+        try:
+            live_id = lookup_live_id(
+                session, name_ja, Path(cache_path),
+                parent_name_ja=parent_name_ja,
+            )
+        finally:
+            session.close()
+    except Exception as exc:
+        logging.getLogger(__name__).debug("Live category lookup failed: %s", exc)
+        return static_id
+    if live_id and live_id != static_id:
+        click.echo(
+            click.style(
+                f"Note: category '{category}' ID refreshed {static_id} → {live_id}.",
+                fg="cyan",
+            ),
+            err=True,
+        )
+        return live_id
+    return static_id
 
 
 def _prompt_category() -> Optional[str]:
@@ -191,6 +241,7 @@ def search(
 ) -> None:
     """Search auctions and display results (does not save to database)."""
     cat_id = _resolve_or_exit(category) if category is not None else _prompt_category()
+    cat_id = _refresh_alias_id(category, cat_id)
     pages = max(1, min(pages, 5))
     session = build_session()
     try:
@@ -250,6 +301,7 @@ def search(
 def track(ctx: click.Context, keyword: str, category: Optional[str], no_closed: bool) -> None:
     """Run a one-time update: scrape auctions and save prices to database."""
     cat_id = _resolve_or_exit(category) if category is not None else _prompt_category()
+    cat_id = _refresh_alias_id(category, cat_id)
     tracker = AuctionTracker(db_path=ctx.obj["db_path"])
     try:
         result = tracker.run_daily_update(keyword, cat_id, include_closed=not no_closed)
@@ -424,8 +476,17 @@ def schedule(
         click.echo(click.style("Error: --time must be in HH:MM format", fg="red"), err=True)
         sys.exit(1)
 
-    cat_id = _resolve_or_exit(category) if category is not None else _prompt_category()
+    static_cat_id = _resolve_or_exit(category) if category is not None else _prompt_category()
+    cat_id = _refresh_alias_id(category, static_cat_id)
     tracker = AuctionTracker(db_path=ctx.obj["db_path"])
+
+    # Refresh the live ID before every scheduled run, not just at startup, so
+    # a long-running schedule self-heals when Yahoo Japan changes IDs.
+    if category and not category.isdigit():
+        def _per_run_resolver() -> Optional[str]:
+            return _refresh_alias_id(category, static_cat_id)
+    else:
+        _per_run_resolver = None  # type: ignore[assignment]
 
     jst = get_japan_time()
     click.echo(f"Current Japan time: {jst.strftime('%Y-%m-%d %H:%M:%S JST')}")
@@ -439,6 +500,7 @@ def schedule(
             run_time=run_time,
             include_closed=not no_closed,
             run_now=run_now,
+            resolve_category_id=_per_run_resolver,
         )
     finally:
         tracker.close()
@@ -499,6 +561,79 @@ def delete(ctx: click.Context, search_id: int) -> None:
         click.echo(click.style(f"No search with ID {search_id} found.", fg="red"), err=True)
         sys.exit(1)
     click.echo(f"Deleted search ID {search_id} and all associated data.")
+
+
+# ---------------------------------------------------------------------------
+# kaiju — shortcut: scrape Godzilla/Kaiju figures and dump to HTML
+# ---------------------------------------------------------------------------
+
+# Path on Yahoo Japan Auctions:
+#   オークショントップ → おもちゃ、ゲーム → フィギュア → 特撮 → ゴジラ、怪獣
+KAIJU_PATH = ["おもちゃ、ゲーム", "フィギュア", "特撮", "ゴジラ、怪獣"]
+
+
+@cli.command()
+@click.option("--keyword", "-k", default="", help="Optional keyword to narrow within the category")
+@click.option("--pages", default=2, show_default=True, help="Pages to fetch (1–5)")
+@click.option("--include-closed", is_flag=True, default=False,
+              help="Also include closed/sold auctions")
+@click.option("--output", "-o", default="kaiju_report.html", show_default=True,
+              help="Output HTML file path")
+@click.option("--cache", default="categories_cache.json", show_default=True,
+              help="Path to local category cache file")
+def kaiju(
+    keyword: str,
+    pages: int,
+    include_closed: bool,
+    output: str,
+    cache: str,
+) -> None:
+    """Quick-look: ゴジラ・怪獣 figures → standalone HTML.
+
+    Walks Yahoo's live category tree
+    (オークショントップ → おもちゃ、ゲーム → フィギュア → 特撮 → ゴジラ、怪獣),
+    scrapes the leaf, and writes the result to a self-contained HTML file —
+    no DB, no scheduling.
+    """
+    pages = max(1, min(pages, 5))
+    session = build_session()
+    try:
+        click.echo("Resolving category path: " + " › ".join(KAIJU_PATH) + " …")
+        leaf = resolve_path(session, KAIJU_PATH, cache_path=Path(cache))
+        if leaf is None:
+            click.echo(click.style(
+                "Could not resolve the category path against Yahoo's live tree.\n"
+                "Try `python main.py browse` to walk it manually.",
+                fg="red"), err=True)
+            sys.exit(1)
+        click.echo(f"  → leaf: {leaf.name} [{leaf.id}]")
+
+        click.echo(f"Fetching active auctions ({pages} page(s))…")
+        try:
+            items = search_active(session, keyword, leaf.id, max_pages=pages)
+            if include_closed:
+                click.echo(f"Fetching closed auctions ({pages} page(s))…")
+                items = items + search_closed(session, keyword, leaf.id, max_pages=pages)
+        except RateLimitError as exc:
+            click.echo(click.style(f"Rate limit: {exc}", fg="red"), err=True)
+            sys.exit(1)
+        except ScraperError as exc:
+            click.echo(click.style(f"Scraper error: {exc}", fg="red"), err=True)
+            sys.exit(1)
+    finally:
+        session.close()
+
+    full_path = ["オークショントップ", *KAIJU_PATH]
+    html_doc = generate_items_html(
+        items,
+        title=f"ゴジラ・怪獣 — {len(items)} items",
+        category_path=full_path,
+        category_id=leaf.id,
+        keyword=keyword or None,
+    )
+    out = Path(output)
+    out.write_text(html_doc, encoding="utf-8")
+    click.echo(f"Saved {len(items)} items to: {out.resolve()}")
 
 
 if __name__ == "__main__":
