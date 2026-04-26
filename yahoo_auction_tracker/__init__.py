@@ -1,3 +1,4 @@
+from .category_browser import CategoryNode, interactive_browse
 from .config import CATEGORIES, DEFAULT_SETTINGS, resolve_category
 from .database import init_db
 from .scraper import RateLimitError, ScraperError, search_active, search_closed
@@ -17,4 +18,6 @@ __all__ = [
     "RateLimitError",
     "get_japan_time",
     "get_japan_date_str",
+    "CategoryNode",
+    "interactive_browse",
 ]

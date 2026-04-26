@@ -32,6 +32,7 @@ from yahoo_auction_tracker.scraper import (
     search_active,
     search_closed,
 )
+from yahoo_auction_tracker.category_browser import interactive_browse
 from yahoo_auction_tracker.html_report import generate_html
 from yahoo_auction_tracker.tracker import AuctionTracker, get_japan_time
 
@@ -95,6 +96,34 @@ def list_categories() -> None:
         for sub_alias, sub in cat.get("subcategories", {}).items():
             rows.append(["", sub["id"], sub["name_ja"], f"  └ {sub_alias}"])
     click.echo(tabulate(rows, headers=["Alias", "Category ID", "日本語名", "Sub-alias"]))
+
+
+# ---------------------------------------------------------------------------
+# browse (interactive category selector)
+# ---------------------------------------------------------------------------
+
+@cli.command()
+@click.option("--cache", default="categories_cache.json", show_default=True,
+              help="Path to local category cache file")
+@click.pass_context
+def browse(ctx: click.Context, cache: str) -> None:
+    """Interactively browse Yahoo Japan auction categories.
+
+    Fetches the live category tree from Yahoo Japan, lets you drill down
+    through subcategories with a numbered menu, and prints the selected
+    category ID so you can use it with search, track, or report.
+
+    The category tree is cached locally for 7 days to avoid repeated fetches.
+    """
+    from pathlib import Path as _Path
+    session = build_session()
+    try:
+        interactive_browse(session, cache_path=_Path(cache))
+    except (RateLimitError, ScraperError) as exc:
+        click.echo(click.style(f"Error: {exc}", fg="red"), err=True)
+        sys.exit(1)
+    finally:
+        session.close()
 
 
 # ---------------------------------------------------------------------------

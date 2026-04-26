@@ -99,7 +99,70 @@ python main.py list
 
 # Show current Japan time
 python main.py japan-time
+
+# Browse categories interactively
+python main.py browse
 ```
+
+---
+
+## Browsing Categories
+
+Yahoo Japan Auctions has hundreds of nested subcategories. Use the `browse` command to drill down interactively and find the exact category ID you want.
+
+```cmd
+python main.py browse
+```
+
+Example session:
+
+```
+Fetching categories from Yahoo Japan Auctions...
+
+==================================================
+  Yahoo Japan Auction Categories
+==================================================
+    1.  アンティーク、コレクション  [2084005020]
+    2.  カメラ、光学機器  [2084020887]
+    3.  テレビゲーム  [2084017887]
+    4.  時計  [26318]
+    ...
+
+    0.  Cancel
+
+Select: 2
+
+Fetching subcategories for "カメラ、光学機器"...
+
+==================================================
+  カメラ、光学機器
+==================================================
+    1.  フィルムカメラ  [2084021077]
+    2.  デジタルカメラ  [2084021107]
+    3.  ミラーレスカメラ  [2084143869]
+    4.  デジタル一眼レフ  [2084023038]
+    ...
+
+    0.  ✓ Use "カメラ、光学機器" (ID: 2084020887)
+    B.  ← Go back
+
+Select: 3
+
+Selected: カメラ、光学機器 > ミラーレスカメラ
+Category ID: 2084143869
+
+Tip: use with other commands:  --category 2084143869
+```
+
+Then use the returned ID:
+
+```cmd
+python main.py search --category 2084143869
+python main.py track --category 2084143869
+python main.py report --category 2084143869 --format html
+```
+
+The category tree is **cached locally** (`categories_cache.json`) for 7 days, so subsequent `browse` runs are instant.
 
 ---
 
@@ -161,16 +224,17 @@ You can also pass a raw numeric category ID: `--category 2084030018`
 
 ## CLI Reference
 
-| Command           | Description                                      |
-|-------------------|--------------------------------------------------|
-| `search`          | Search and display results (no DB write)         |
-| `track`           | One-shot scrape and save to database             |
-| `report`          | Show price history and stats                     |
-| `schedule`        | Schedule daily tracking (blocks, Ctrl+C to stop) |
-| `list`            | List all tracked searches                        |
-| `delete <ID>`     | Remove a search and all its history              |
-| `list-categories` | Show category aliases and IDs                    |
-| `japan-time`      | Display current JST from worldtimeapi.org        |
+| Command           | Description                                              |
+|-------------------|----------------------------------------------------------|
+| `browse`          | Interactively browse live Yahoo Japan category tree      |
+| `search`          | Search and display results (no DB write)                 |
+| `track`           | One-shot scrape and save to database                     |
+| `report`          | Show price history and stats                             |
+| `schedule`        | Schedule daily tracking (blocks, Ctrl+C to stop)         |
+| `list`            | List all tracked searches                                |
+| `delete <ID>`     | Remove a search and all its history                      |
+| `list-categories` | Show built-in category aliases and IDs                   |
+| `japan-time`      | Display current JST from worldtimeapi.org                |
 
 `--keyword` / `-k` can be omitted from any command — you will be prompted to enter it interactively.
 
