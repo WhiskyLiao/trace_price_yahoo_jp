@@ -71,15 +71,22 @@ def build_session() -> requests.Session:
     return session
 
 
-def warm_session(session: requests.Session) -> None:
-    """Visit the Yahoo Japan auction main page to obtain session cookies.
+def warm_session(session: requests.Session, *, category_id: Optional[str] = None) -> None:
+    """Visit Yahoo Japan auction pages to obtain session cookies.
 
     Yahoo Japan requires a valid session cookie before accepting search
-    requests. Without this step, search pages return 403 or an empty body.
+    requests. When a category is specified we also visit the category search
+    page so the session is primed for category-filtered results.
     """
     try:
         session.get("https://auctions.yahoo.co.jp/", timeout=15)
-        logger.debug("Session warmed up with cookies from main page.")
+        if category_id:
+            session.get(
+                BASE_SEARCH_URL,
+                params={"auccat": category_id},
+                timeout=15,
+            )
+        logger.debug("Session warmed up (category_id=%s).", category_id)
     except Exception as exc:
         logger.debug("Session warm-up failed (continuing anyway): %s", exc)
 
@@ -260,8 +267,8 @@ def _paginate(
     all_items: list[AuctionItem] = []
     seen_ids: set[str] = set()
 
-    # Warm up session cookies on first call
-    warm_session(session)
+    # Warm up session cookies; prime category context when filtering by category
+    warm_session(session, category_id=category_id)
 
     for page in range(max_pages):
         offset = page * items_per_page + 1

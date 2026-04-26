@@ -18,7 +18,9 @@ from .config import CATEGORIES, DEFAULT_SETTINGS
 logger = logging.getLogger(__name__)
 
 MAIN_PAGE_URL = "https://auctions.yahoo.co.jp/"
-CATEGORY_PAGE_URL = "https://auctions.yahoo.co.jp/category/list/{cat_id}"
+# Use the search URL with auccat= filter to get subcategory navigation links;
+# /category/list/{id} returns 404 for most category IDs.
+CATEGORY_PAGE_URL = "https://auctions.yahoo.co.jp/search/search?auccat={cat_id}"
 CACHE_TTL_DAYS = 7
 
 
