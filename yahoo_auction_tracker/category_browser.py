@@ -110,6 +110,18 @@ def _normalize(name: str) -> str:
     return name.replace("・", "、").replace(" ", "").replace("　", "").strip()
 
 
+# Yahoo's tree's depth 0 is the auction main page itself ("オークショントップ"),
+# which is not a clickable subcategory — fetch_top_categories already returns
+# its depth-1 children. Paths that include the root are accepted and the
+# leading element is silently skipped.
+_ROOT_NAMES = {_normalize(n) for n in (
+    "オークショントップ",
+    "オークションTOP",
+    "オークション トップ",
+    "Auction Top",
+)}
+
+
 def resolve_path(
     session: requests.Session,
     names: list[str],
@@ -120,9 +132,18 @@ def resolve_path(
 
     Returns the leaf CategoryNode (with .id and .name) or None on miss.
     Comparisons normalize ・ vs 、 and ignore whitespace, so callers can
-    spell paths either way.
+    spell paths either way. A leading "オークショントップ" (the implicit
+    depth-0 root) is accepted and skipped.
     """
     if not names:
+        return None
+
+    # Strip a leading "オークショントップ" — that's Yahoo's depth-0 root, which
+    # is the auction main page rather than a clickable subcategory.
+    walk_names = list(names)
+    if walk_names and _normalize(walk_names[0]) in _ROOT_NAMES:
+        walk_names = walk_names[1:]
+    if not walk_names:
         return None
 
     # Use cached top-level if present and fresh, otherwise fetch live.
@@ -134,7 +155,7 @@ def resolve_path(
     if not top:
         return None
 
-    targets = [_normalize(n) for n in names]
+    targets = [_normalize(n) for n in walk_names]
     current_list = top
     matched: Optional[CategoryNode] = None
 
@@ -143,7 +164,7 @@ def resolve_path(
         if match is None:
             logger.warning(
                 "resolve_path: no match for %r at depth %d (candidates: %s)",
-                names[depth], depth, [n.name for n in current_list][:8],
+                walk_names[depth], depth, [n.name for n in current_list][:8],
             )
             return None
         matched = match

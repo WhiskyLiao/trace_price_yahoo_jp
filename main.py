@@ -567,9 +567,9 @@ def delete(ctx: click.Context, search_id: int) -> None:
 # kaiju — shortcut: scrape Godzilla/Kaiju figures and dump to HTML
 # ---------------------------------------------------------------------------
 
-# Path on Yahoo Japan Auctions:
+# Path on Yahoo Japan Auctions, starting from depth 0:
 #   オークショントップ → おもちゃ、ゲーム → フィギュア → 特撮 → ゴジラ、怪獣
-KAIJU_PATH = ["おもちゃ、ゲーム", "フィギュア", "特撮", "ゴジラ、怪獣"]
+KAIJU_PATH = ["オークショントップ", "おもちゃ、ゲーム", "フィギュア", "特撮", "ゴジラ、怪獣"]
 
 
 @cli.command()
@@ -623,11 +623,10 @@ def kaiju(
     finally:
         session.close()
 
-    full_path = ["オークショントップ", *KAIJU_PATH]
     html_doc = generate_items_html(
         items,
         title=f"ゴジラ・怪獣 — {len(items)} items",
-        category_path=full_path,
+        category_path=KAIJU_PATH,
         category_id=leaf.id,
         keyword=keyword or None,
     )

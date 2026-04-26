@@ -273,7 +273,8 @@ Open it in any browser — no server or internet required to view the table.
 
 ## Quick Category: ゴジラ・怪獣
 
-A built-in shortcut that walks the live Yahoo Japan category tree
+A built-in shortcut that walks the live Yahoo Japan category tree, starting
+from depth 0:
 
 ```
 オークショントップ → おもちゃ、ゲーム → フィギュア → 特撮 → ゴジラ、怪獣
