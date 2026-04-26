@@ -154,6 +154,15 @@ def interactive_browse(
     """
     import click
 
+    # Always visit the main page first so session cookies are set.
+    # Without this, fetch_subcategories fails on every run that loads
+    # top categories from cache (cache hit skips fetch_top_categories,
+    # which was the only place that set cookies).
+    try:
+        session.get(MAIN_PAGE_URL, timeout=15)
+    except Exception:
+        pass
+
     top_nodes = load_cache(cache_path)
     if top_nodes is None:
         click.echo("Fetching categories from Yahoo Japan Auctions...")
@@ -166,6 +175,9 @@ def interactive_browse(
 
     current: list[CategoryNode] = top_nodes
     breadcrumb: list[CategoryNode] = []
+    # Stack of previous `current` lists; lets B restore the exact list that
+    # was shown at each level without re-fetching over the network.
+    history: list[list[CategoryNode]] = []
 
     while True:
         # Header
@@ -192,11 +204,7 @@ def interactive_browse(
         if raw.upper() == "B":
             if breadcrumb:
                 breadcrumb.pop()
-                if breadcrumb:
-                    subs = fetch_subcategories(session, breadcrumb[-1].id)
-                    current = subs if subs else current
-                else:
-                    current = top_nodes
+                current = history.pop() if history else top_nodes
             continue
 
         if raw == "0":
@@ -224,6 +232,7 @@ def interactive_browse(
         time.sleep(DEFAULT_SETTINGS["request_delay_seconds"])
 
         if subs:
+            history.append(current)
             current = subs
         else:
             # Leaf node — no subcategories
