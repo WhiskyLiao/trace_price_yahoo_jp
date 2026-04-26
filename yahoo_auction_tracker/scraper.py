@@ -3,7 +3,7 @@ from __future__ import annotations
 import logging
 import re
 import time
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from typing import Optional
 from urllib.parse import urljoin
 
@@ -17,6 +17,9 @@ from .config import BASE_SEARCH_URL, CLOSED_SEARCH_URL, DEFAULT_SETTINGS
 logger = logging.getLogger(__name__)
 
 _CAPTCHA_MARKERS = ("確認が必要", "お使いのブラウザではご利用になれません", "アクセスが制限されています")
+
+# Matches /auction/{id} (relative) and page.auctions.yahoo.co.jp/jp/auction/{id}
+_AUCTION_HREF_RE = re.compile(r"/auction/([A-Za-z0-9]+)")
 
 
 class ScraperError(Exception):
@@ -46,9 +49,14 @@ def build_session() -> requests.Session:
     session.headers.update(
         {
             "User-Agent": DEFAULT_SETTINGS["user_agent"],
+            "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,*/*;q=0.8",
             "Accept-Language": "ja,en-US;q=0.9,en;q=0.8",
             "Accept-Encoding": "gzip, deflate, br",
-            "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
+            "Referer": "https://auctions.yahoo.co.jp/",
+            "Sec-Fetch-Dest": "document",
+            "Sec-Fetch-Mode": "navigate",
+            "Sec-Fetch-Site": "same-origin",
+            "Upgrade-Insecure-Requests": "1",
         }
     )
     retry = Retry(
@@ -61,6 +69,19 @@ def build_session() -> requests.Session:
     session.mount("https://", adapter)
     session.mount("http://", adapter)
     return session
+
+
+def warm_session(session: requests.Session) -> None:
+    """Visit the Yahoo Japan auction main page to obtain session cookies.
+
+    Yahoo Japan requires a valid session cookie before accepting search
+    requests. Without this step, search pages return 403 or an empty body.
+    """
+    try:
+        session.get("https://auctions.yahoo.co.jp/", timeout=15)
+        logger.debug("Session warmed up with cookies from main page.")
+    except Exception as exc:
+        logger.debug("Session warm-up failed (continuing anyway): %s", exc)
 
 
 def _check_blocked(resp: requests.Response) -> None:
@@ -92,16 +113,25 @@ def fetch_page(
     return BeautifulSoup(resp.text, "html.parser")
 
 
-def _parse_yen(text: Optional[str]) -> Optional[int]:
-    if not text:
-        return None
-    cleaned = re.sub(r"[¥,円\s\xa5]", "", text.strip())
+def _extract_item_id(url: str) -> Optional[str]:
+    m = _AUCTION_HREF_RE.search(url)
+    return m.group(1) if m else None
+
+
+def _parse_yen(text: str) -> Optional[int]:
+    cleaned = re.sub(r"[¥￥,円\s\xa5]", "", text)
     return int(cleaned) if cleaned.isdigit() else None
 
 
-def _extract_item_id(url: str) -> Optional[str]:
-    m = re.search(r"/auction/([A-Za-z0-9]+)", url)
-    return m.group(1) if m else None
+def _extract_prices(text: str) -> tuple[Optional[int], Optional[int]]:
+    """Return (current_price, buynow_price) parsed from container text."""
+    hits = re.findall(r"[¥￥]([\d,]+)", text)
+    prices = []
+    for h in hits:
+        raw = h.replace(",", "")
+        if raw.isdigit():
+            prices.append(int(raw))
+    return (prices[0] if prices else None, prices[1] if len(prices) > 1 else None)
 
 
 def _parse_condition(text: str) -> Optional[str]:
@@ -112,79 +142,76 @@ def _parse_condition(text: str) -> Optional[str]:
     return None
 
 
+def _item_container(anchor: BeautifulSoup) -> BeautifulSoup:
+    """Walk up the DOM from an auction anchor to find the per-item container.
+
+    Stops at the first ancestor that contains only ONE auction item link,
+    which is the per-item card/row regardless of class names.
+    """
+    node = anchor
+    for _ in range(8):
+        parent = node.find_parent(["li", "div", "article", "section"])
+        if parent is None:
+            break
+        # Count how many distinct auction IDs live in this parent
+        ids = {_extract_item_id(a["href"]) for a in parent.find_all("a", href=_AUCTION_HREF_RE) if a.get("href")}
+        ids.discard(None)
+        if len(ids) > 1:
+            # Too many items — the previous level was the right container
+            break
+        node = parent
+    return node
+
+
 def parse_items(soup: BeautifulSoup, *, is_closed: bool = False) -> list[AuctionItem]:
+    """Extract auction items from a search result page.
+
+    Uses auction item URLs as the discovery anchor instead of CSS class
+    names so the parser stays robust across Yahoo Japan HTML changes.
+    """
     results: list[AuctionItem] = []
+    seen: set[str] = set()
 
-    containers = soup.select("li.Product") or soup.select("div.Product")
-    if not containers:
-        # Fallback: try generic search result structure
-        containers = soup.select("[class*='Product']")
+    anchors = soup.find_all("a", href=_AUCTION_HREF_RE)
+    logger.debug("Found %d auction anchor tags on page.", len(anchors))
 
-    zero_price_count = 0
-
-    for container in containers:
+    for anchor in anchors:
         try:
-            # Title and URL
-            title_tag = (
-                container.select_one("h3.Product__title a")
-                or container.select_one(".Product__title a")
-                or container.select_one("a.Product__imageLink")
-            )
-            if not title_tag:
+            href = anchor.get("href", "")
+            item_id = _extract_item_id(href)
+            if not item_id or item_id in seen:
                 continue
-            title = title_tag.get_text(strip=True)
-            raw_url = title_tag.get("href", "")
-            if not raw_url:
+            seen.add(item_id)
+
+            item_url = href if href.startswith("http") else urljoin("https://auctions.yahoo.co.jp", href)
+
+            container = _item_container(anchor)
+            text = container.get_text(" ", strip=True)
+
+            # Title: prefer anchor text; fall back to nearest img alt
+            title = anchor.get_text(strip=True)
+            if not title:
+                img = anchor.find("img")
+                if img:
+                    title = img.get("alt", "")
+            if not title or len(title) < 2:
                 continue
-            item_url = raw_url if raw_url.startswith("http") else urljoin("https://auctions.yahoo.co.jp", raw_url)
-            item_id = _extract_item_id(item_url)
-            if not item_id:
-                continue
 
-            # Current price
-            price_tag = (
-                container.select_one("span.Product__price")
-                or container.select_one(".Product__priceValue")
-                or container.select_one("dd.Product__currentPrice")
-                or container.select_one("[class*='price']")
-            )
-            current_price = _parse_yen(price_tag.get_text() if price_tag else None)
-            if current_price is None:
-                zero_price_count += 1
+            current_price, buynow_price = _extract_prices(text)
 
-            # Buy-now price
-            buynow_tag = (
-                container.select_one(".Product__bidNowPrice")
-                or container.select_one("dd.Product__bidNow")
-                or container.select_one("[class*='bidNow']")
-            )
-            buynow_price = _parse_yen(buynow_tag.get_text() if buynow_tag else None)
+            bid_m = re.search(r"(\d+)\s*入札", text)
+            bid_count = int(bid_m.group(1)) if bid_m else 0
 
-            # Bid count
-            bid_tag = (
-                container.select_one("dd.Product__bid a")
-                or container.select_one(".Product__bidNum")
-                or container.select_one("[class*='bid']")
-            )
-            bid_text = bid_tag.get_text(strip=True) if bid_tag else "0"
-            bid_match = re.search(r"(\d+)", bid_text)
-            bid_count = int(bid_match.group(1)) if bid_match else 0
+            time_m = re.search(r"(残り[^\s　]{1,15})", text)
+            time_remaining = time_m.group(1) if time_m else None
 
-            # Time remaining
-            time_tag = (
-                container.select_one("dd.Product__time")
-                or container.select_one(".Product__timeRemaining")
-                or container.select_one("[class*='time']")
-            )
-            time_remaining = time_tag.get_text(strip=True) if time_tag else None
+            condition = _parse_condition(text)
 
-            # Condition
-            cond_tag = container.select_one(".Product__condition") or container.select_one("[class*='condition']")
-            condition = _parse_condition(cond_tag.get_text() if cond_tag else "")
-
-            # Seller
-            seller_tag = container.select_one("a.Product__seller") or container.select_one("[class*='seller'] a")
-            seller_id = seller_tag.get_text(strip=True) if seller_tag else None
+            # Seller: look for a link near 出品者
+            seller_id: Optional[str] = None
+            seller_m = re.search(r"出品者[：:\s]*([A-Za-z0-9_\-]+)", text)
+            if seller_m:
+                seller_id = seller_m.group(1)
 
             results.append(
                 AuctionItem(
@@ -201,26 +228,22 @@ def parse_items(soup: BeautifulSoup, *, is_closed: bool = False) -> list[Auction
                 )
             )
         except Exception:
-            logger.debug("Skipping malformed item", exc_info=True)
+            logger.debug("Skipping item", exc_info=True)
             continue
 
-    if containers and zero_price_count > len(containers) * 0.5:
+    if not results and anchors:
         logger.warning(
-            "Over 50%% of items on page had no price parsed — "
-            "Yahoo may have changed their HTML structure."
+            "Found %d auction links but parsed 0 items — "
+            "check page structure with --verbose.",
+            len(anchors),
         )
 
     return results
 
 
 def parse_total_count(soup: BeautifulSoup) -> int:
-    for selector in (".SearchMode__count", ".Result__count", "[class*='count']"):
-        tag = soup.select_one(selector)
-        if tag:
-            m = re.search(r"([\d,]+)", tag.get_text())
-            if m:
-                return int(m.group(1).replace(",", ""))
-    return 0
+    m = re.search(r"([\d,]+)\s*件", soup.get_text())
+    return int(m.group(1).replace(",", "")) if m else 0
 
 
 def _paginate(
@@ -237,6 +260,9 @@ def _paginate(
     all_items: list[AuctionItem] = []
     seen_ids: set[str] = set()
 
+    # Warm up session cookies on first call
+    warm_session(session)
+
     for page in range(max_pages):
         offset = page * items_per_page + 1
         params: dict = {
@@ -248,6 +274,8 @@ def _paginate(
         }
         if category_id:
             params["auccat"] = category_id
+
+        logger.debug("Fetching page %d | params: %s", page + 1, params)
 
         try:
             soup = fetch_page(session, base_url, params)
