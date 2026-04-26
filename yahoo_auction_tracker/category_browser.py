@@ -201,13 +201,21 @@ def resolve_path(
         top = fetch_top_categories(session)
         if top and cache_path is not None:
             save_cache(top, cache_path)
-    if not top:
-        # All live URLs failed (or returned only noise). Fall back to the
-        # static set so well-known paths like `kaiju` still resolve via
-        # fetch_subcategories, which uses the search page and is independent
-        # of the broken main-page DOM.
-        logger.info("resolve_path: live top fetch empty; using _builtin_nodes() fallback.")
-        top = _builtin_nodes()
+    if top is None:
+        top = []
+
+    # Always merge in _builtin_nodes() entries that aren't already present by
+    # name. The live fetch can be partial (e.g. a candidate URL returns only a
+    # subset of categories or only noise that gets filtered to a small list);
+    # without the merge, well-known paths like `kaiju` fail at depth 0 because
+    # おもちゃ、ゲーム happens not to be in the partial live result. The merge
+    # is by Japanese name so a live entry with a fresher ID always wins.
+    seen_names = {_normalize(n.name) for n in top}
+    for hedge in _builtin_nodes():
+        if _normalize(hedge.name) not in seen_names:
+            top.append(hedge)
+            seen_names.add(_normalize(hedge.name))
+
     if not top:
         return None
 
@@ -219,11 +227,13 @@ def resolve_path(
         match = next((n for n in current_list if _normalize(n.name) == target), None)
         if match is None:
             logger.warning(
-                "resolve_path: no match for %r at depth %d (candidates: %s)",
-                walk_names[depth], depth, [n.name for n in current_list][:8],
+                "resolve_path: no match for %r at depth %d (%d candidates: %s)",
+                walk_names[depth], depth, len(current_list),
+                [n.name for n in current_list][:12],
             )
             return None
         matched = match
+        logger.debug("resolve_path: depth %d -> %s [%s]", depth, match.name, match.id)
         if depth < len(targets) - 1:
             current_list = fetch_subcategories(session, match.id)
             if not current_list:
