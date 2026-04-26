@@ -256,6 +256,9 @@ Open it in any browser — no server or internet required to view the table.
 Data is stored in `auction_tracker.db` (SQLite) in the current directory.  
 Use `--db C:\path\to\custom.db` to specify a different path.
 
+`report` opens the database read-only and never creates it; if the file
+doesn't exist yet, run `track` first.
+
 **Backup (Windows):**
 ```cmd
 copy auction_tracker.db auction_tracker_backup.db
@@ -265,6 +268,20 @@ copy auction_tracker.db auction_tracker_backup.db
 ```bash
 cp auction_tracker.db auction_tracker_backup_$(date +%Y%m%d).db
 ```
+
+---
+
+## Generated Files
+
+The tool creates the following files in the working directory. All are
+covered by `.gitignore`:
+
+| File                       | Created by               | Purpose                                |
+|----------------------------|--------------------------|----------------------------------------|
+| `auction_tracker.db`       | `track`, `list`, `delete`| SQLite price history database          |
+| `categories_cache.json`    | `browse`                 | Local category tree cache (7-day TTL)  |
+| `<keyword>_report.html`    | `report --format html`   | Standalone HTML report                 |
+| `tracker.log`              | cron example in this README | Schedule run output                 |
 
 ---
 

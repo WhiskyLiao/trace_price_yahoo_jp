@@ -1,3 +1,8 @@
 *.pyc
 __pycache__/
 *.db
+.venv/
+venv/
+categories_cache.json
+*_report.html
+tracker.log
