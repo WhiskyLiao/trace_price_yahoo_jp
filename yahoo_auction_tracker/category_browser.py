@@ -125,11 +125,14 @@ def fetch_top_categories(session: requests.Session) -> list[CategoryNode]:
     for url in TOP_CATEGORY_URL_CANDIDATES:
         soup = _get(session, url)
         if soup is None:
+            logger.info("Top-category fetch from %s: no response (HTTP error or timeout)", url)
             continue
         nodes = _parse_links(soup)
-        logger.debug("Top-category fetch from %s: %d nodes", url, len(nodes))
+        logger.info(
+            "Top-category fetch from %s: %d nodes after filter (sample: %s)",
+            url, len(nodes), [n.name for n in nodes[:5]],
+        )
         if len(nodes) >= MIN_TOP_CATEGORIES:
-            logger.info("Fetched %d top-level categories from %s", len(nodes), url)
             return nodes
         # Keep the largest sub-threshold result as a degraded fallback.
         if len(nodes) > len(best):
