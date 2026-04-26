@@ -266,6 +266,8 @@ def _paginate(
     items_per_page = DEFAULT_SETTINGS["items_per_page"]
     all_items: list[AuctionItem] = []
     seen_ids: set[str] = set()
+    # Set to True when auccat causes a 404 so we stop sending it
+    auccat_failed = False
 
     # Warm up session cookies; prime category context when filtering by category
     warm_session(session, category_id=category_id)
@@ -276,10 +278,8 @@ def _paginate(
             "p": keyword,
             "n": items_per_page,
             "b": offset,
-            "s1": "new",
-            "o1": "d",
         }
-        if category_id:
+        if category_id and not auccat_failed:
             params["auccat"] = category_id
 
         logger.debug("Fetching page %d | params: %s", page + 1, params)
@@ -290,8 +290,26 @@ def _paginate(
             logger.warning("Rate limit hit on page %d, stopping early.", page + 1)
             break
         except ScraperError as exc:
-            logger.error("Scrape error on page %d: %s", page + 1, exc)
-            break
+            # If a category-filtered request returns 404, the stored category ID
+            # is likely outdated.  Strip it, retry this page without the filter,
+            # and continue — better to return unfiltered results than nothing.
+            if "404" in str(exc) and params.get("auccat") and not auccat_failed:
+                auccat_failed = True
+                logger.warning(
+                    "Category ID '%s' returned HTTP 404 — it may be outdated. "
+                    "Run 'python main.py browse' to obtain a current category ID. "
+                    "Retrying page %d without category filter...",
+                    category_id, page + 1,
+                )
+                params.pop("auccat")
+                try:
+                    soup = fetch_page(session, base_url, params)
+                except ScraperError as exc2:
+                    logger.error("Scrape error on page %d: %s", page + 1, exc2)
+                    break
+            else:
+                logger.error("Scrape error on page %d: %s", page + 1, exc)
+                break
 
         page_items = parse_items(soup, is_closed=is_closed)
         new_items = [i for i in page_items if i.item_id not in seen_ids]

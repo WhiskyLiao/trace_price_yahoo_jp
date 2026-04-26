@@ -208,6 +208,14 @@ def search(
 
     if not items:
         click.echo("No results found.")
+        if cat_id:
+            click.echo(
+                click.style(
+                    f"Tip: category ID '{cat_id}' may be outdated. "
+                    "Run 'python main.py browse' to get a current ID.",
+                    fg="yellow",
+                )
+            )
         return
 
     rows = [
