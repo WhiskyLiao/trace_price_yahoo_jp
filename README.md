@@ -164,6 +164,25 @@ python main.py report --category 2084143869 --format html
 
 The category tree is **cached locally** (`categories_cache.json`) for 7 days, so subsequent `browse` runs are instant.
 
+### Automatic ID refresh
+
+Yahoo Japan rotates category IDs occasionally, so the static IDs shipped in
+`config.py` will eventually go stale. To handle this transparently:
+
+- Every `search`, `track`, and scheduled run looks up the alias in
+  `categories_cache.json` and uses the **current live ID** for that
+  category's Japanese name.
+- The cache auto-refreshes from Yahoo when missing or older than 7 days —
+  no need to run `browse` first.
+- If the live ID differs from the static one, you'll see a one-line note:
+  `Note: category 'cameras' ID refreshed 2084020887 → <new>`.
+- Numeric `--category 1234567` IDs pass through untouched.
+- If the network is unreachable, the static ID is used and the search still
+  proceeds; a final 404 fallback in the scraper retries without the filter.
+
+For long-running `schedule` jobs, the refresh runs **before each daily
+run**, so a multi-week schedule self-heals when Yahoo changes an ID.
+
 ---
 
 ## Scheduling Daily Updates
