@@ -568,8 +568,12 @@ def delete(ctx: click.Context, search_id: int) -> None:
 # ---------------------------------------------------------------------------
 
 # Path on Yahoo Japan Auctions, starting from depth 0:
-#   オークショントップ → おもちゃ、ゲーム → フィギュア → 特撮 → ゴジラ、怪獣
-KAIJU_PATH = ["オークショントップ", "おもちゃ、ゲーム", "フィギュア", "特撮", "ゴジラ、怪獣"]
+#   オークショントップ → おもちゃ、ホビー、グッズ → フィギュア → 特撮 → ゴジラ、怪獣
+# Depth-1 was originally written as "おもちゃ、ゲーム" but that isn't a real
+# Yahoo Japan top category — the actual one is "おもちゃ、ホビー、グッズ"
+# (config alias `toys`, id 2084203698). Using the canonical name lets the
+# existing config entry supply the id via _builtin_nodes() / live fetch.
+KAIJU_PATH = ["オークショントップ", "おもちゃ、ホビー、グッズ", "フィギュア", "特撮", "ゴジラ、怪獣"]
 
 
 @cli.command()
@@ -596,7 +600,7 @@ def kaiju(
     """Quick-look: ゴジラ・怪獣 figures → standalone HTML.
 
     Walks Yahoo's live category tree
-    (オークショントップ → おもちゃ、ゲーム → フィギュア → 特撮 → ゴジラ、怪獣),
+    (オークショントップ → おもちゃ、ホビー、グッズ → フィギュア → 特撮 → ゴジラ、怪獣),
     scrapes the leaf, and writes the result to a self-contained HTML file —
     no DB, no scheduling. If path resolution fails, pass --category-id with a
     leaf ID found via `python main.py browse`.
