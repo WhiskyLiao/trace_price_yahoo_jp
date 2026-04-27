@@ -187,8 +187,19 @@ def fetch_subcategories(session: requests.Session, cat_id: str) -> list[Category
     return []
 
 
+_COUNT_SUFFIX_RE = re.compile(r"[\(（][\d,，]+[\)）]\s*$")
+
+
 def _normalize(name: str) -> str:
-    """Match category names tolerantly: drop whitespace, treat ・ and 、 alike."""
+    """Match category names tolerantly:
+
+    - strip a trailing "(N,NNN)" / "（N,NNN）" item-count suffix that Yahoo
+      appends to category links on search results pages
+      (e.g. "おもちゃ、ゲーム(781,120)" → "おもちゃ、ゲーム"),
+    - drop whitespace,
+    - treat ・ and 、 as the same separator.
+    """
+    name = _COUNT_SUFFIX_RE.sub("", name)
     return name.replace("・", "、").replace(" ", "").replace("　", "").strip()
 
 
