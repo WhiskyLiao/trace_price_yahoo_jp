@@ -18,9 +18,24 @@ from .config import CATEGORIES, DEFAULT_SETTINGS
 logger = logging.getLogger(__name__)
 
 MAIN_PAGE_URL = "https://auctions.yahoo.co.jp/"
-# Use the search URL with auccat= filter to get subcategory navigation links;
-# /category/list/{id} returns 404 for most category IDs.
-CATEGORY_PAGE_URL = "https://auctions.yahoo.co.jp/search/search?auccat={cat_id}"
+
+# Subcategory navigation URLs. Yahoo redirects /search/search?auccat=<id>
+# (no keyword) to /category/list/<id>/... which is currently returning 500
+# for many categories. Sending a non-empty keyword avoids the redirect and
+# returns the search results page, whose sidebar still contains every
+# subcategory of the parent as ?auccat= links. We try a chain in order and
+# accept the first that yields any subcategories.
+SUBCATEGORY_URL_TEMPLATES = (
+    # Common Japanese particle が/の matches almost every listing — gets us
+    # a populated search page (with the category sidebar) for any cat.
+    "https://auctions.yahoo.co.jp/search/search?p=%E3%81%AE&auccat={cat_id}",  # の (URL-encoded)
+    "https://auctions.yahoo.co.jp/search/search?p=a&auccat={cat_id}",
+    # Last-ditch — the original URL, which currently 302→500 for the user
+    # but harmless to try since _get just returns None on bad responses.
+    "https://auctions.yahoo.co.jp/search/search?auccat={cat_id}",
+)
+# Kept for backwards compatibility with anything that imported it.
+CATEGORY_PAGE_URL = SUBCATEGORY_URL_TEMPLATES[-1]
 
 # Top-level categories used to come from the main page, but Yahoo now renders
 # that list via JS — only the "+条件指定" filter link is in the static HTML.
@@ -28,7 +43,8 @@ CATEGORY_PAGE_URL = "https://auctions.yahoo.co.jp/search/search?auccat={cat_id}"
 # ?auccat=… anchors, so we walk this chain in order and accept the first
 # response that yields ≥ MIN_TOP_CATEGORIES sensible nodes.
 TOP_CATEGORY_URL_CANDIDATES = (
-    "https://auctions.yahoo.co.jp/search/search?p=",
+    "https://auctions.yahoo.co.jp/search/search?p=%E3%81%AE",  # の
+    "https://auctions.yahoo.co.jp/search/search?p=a",
     "https://auctions.yahoo.co.jp/category/list",
     "https://auctions.yahoo.co.jp/",  # last‑ditch fallback (current behavior)
 )
@@ -148,13 +164,27 @@ def fetch_top_categories(session: requests.Session) -> list[CategoryNode]:
 
 
 def fetch_subcategories(session: requests.Session, cat_id: str) -> list[CategoryNode]:
-    url = CATEGORY_PAGE_URL.format(cat_id=cat_id)
-    soup = _get(session, url)
-    if soup is None:
-        return []
-    nodes = _parse_links(soup, exclude_id=cat_id)
-    logger.info("Fetched %d subcategories for %s", len(nodes), cat_id)
-    return nodes
+    """Fetch the subcategories of a Yahoo Japan auction category by id.
+
+    Walks SUBCATEGORY_URL_TEMPLATES in order — the no-keyword form 302-redirects
+    to a /category/list/<id>/ URL that currently 500s, so the keyword variants
+    come first. Returns the first non-empty result.
+    """
+    for template in SUBCATEGORY_URL_TEMPLATES:
+        url = template.format(cat_id=cat_id)
+        soup = _get(session, url)
+        if soup is None:
+            logger.info("Subcategory fetch from %s: no response (HTTP error or timeout)", url)
+            continue
+        nodes = _parse_links(soup, exclude_id=cat_id)
+        logger.info(
+            "Subcategory fetch from %s: %d nodes (sample: %s)",
+            url, len(nodes), [n.name for n in nodes[:5]],
+        )
+        if nodes:
+            return nodes
+    logger.warning("All subcategory URLs returned no nodes for cat_id=%s", cat_id)
+    return []
 
 
 def _normalize(name: str) -> str:
