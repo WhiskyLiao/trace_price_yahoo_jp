@@ -246,14 +246,13 @@ def resolve_path(
 
 
 # Extra top-level categories that aren't in config.CATEGORIES but are needed
-# by built-in shortcut paths (e.g. the `kaiju` command). These exist purely
-# as a hedge — if every TOP_CATEGORY_URL_CANDIDATES request fails, name-based
-# resolvers can still find the entry. The leaf walk past this point goes
-# through fetch_subcategories, which uses the search page and is independent
-# of the broken main-page DOM.
-_EXTRA_TOP_NODES = (
-    ("おもちゃ、ゲーム", "26146"),  # path root for `kaiju`
-)
+# by built-in shortcut paths. Empty for now — the previous entry for
+# おもちゃ、ゲーム / id 26146 was removed because that id is dead (Yahoo
+# redirects /search/search?auccat=26146 to a /category/list/26146 URL that
+# 404s). The canonical category "おもちゃ、ホビー、グッズ" is already in
+# config.CATEGORIES (alias `toys`, id 2084203698) and is picked up by
+# _builtin_nodes() automatically.
+_EXTRA_TOP_NODES: tuple[tuple[str, str], ...] = ()
 
 
 def _builtin_nodes() -> list[CategoryNode]:

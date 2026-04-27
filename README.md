@@ -277,7 +277,7 @@ A built-in shortcut that walks the live Yahoo Japan category tree, starting
 from depth 0:
 
 ```
-オークショントップ → おもちゃ、ゲーム → フィギュア → 特撮 → ゴジラ、怪獣
+オークショントップ → おもちゃ、ホビー、グッズ → フィギュア → 特撮 → ゴジラ、怪獣
 ```
 
 scrapes the leaf, and writes a self-contained HTML file — no DB, no
