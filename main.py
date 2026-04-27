@@ -580,7 +580,11 @@ KAIJU_PATH = ["オークショントップ", "おもちゃ、ゲーム", "フィ
 
 @cli.command()
 @click.option("--keyword", "-k", default="", help="Optional keyword to narrow within the category")
-@click.option("--pages", default=2, show_default=True, help="Pages to fetch (1–5)")
+@click.option("--pages", default=2, show_default=True,
+              help="Max pages to fetch (1–200). Ignored when --all is set.")
+@click.option("--all", "fetch_all", is_flag=True, default=False,
+              help="Fetch every page until the category is exhausted "
+                   "(may take a few minutes; ~50 items per page).")
 @click.option("--include-closed", is_flag=True, default=False,
               help="Also include closed/sold auctions")
 @click.option("--output", "-o", default="kaiju_report.html", show_default=True,
@@ -594,6 +598,7 @@ KAIJU_PATH = ["オークショントップ", "おもちゃ、ゲーム", "フィ
 def kaiju(
     keyword: str,
     pages: int,
+    fetch_all: bool,
     include_closed: bool,
     output: str,
     cache: str,
@@ -607,7 +612,13 @@ def kaiju(
     no DB, no scheduling. If path resolution fails, pass --category-id with a
     leaf ID found via `python main.py browse`.
     """
-    pages = max(1, min(pages, 5))
+    # When --all is set, allow up to 1000 pages (≈ 50,000 items). The
+    # scraper's _paginate breaks early when a page returns < 50 items, so
+    # the real fetch count is bounded by what Yahoo actually has.
+    if fetch_all:
+        max_pages = 1000
+    else:
+        max_pages = max(1, min(pages, 200))
     session = build_session()
     try:
         if category_id:
@@ -630,12 +641,13 @@ def kaiju(
                 sys.exit(1)
         click.echo(f"  → leaf: {leaf.name} [{leaf.id}]")
 
-        click.echo(f"Fetching active auctions ({pages} page(s))…")
+        scope = "all pages" if fetch_all else f"up to {max_pages} page(s)"
+        click.echo(f"Fetching active auctions ({scope})…")
         try:
-            items = search_active(session, keyword, leaf.id, max_pages=pages)
+            items = search_active(session, keyword, leaf.id, max_pages=max_pages)
             if include_closed:
-                click.echo(f"Fetching closed auctions ({pages} page(s))…")
-                items = items + search_closed(session, keyword, leaf.id, max_pages=pages)
+                click.echo(f"Fetching closed auctions ({scope})…")
+                items = items + search_closed(session, keyword, leaf.id, max_pages=max_pages)
         except RateLimitError as exc:
             click.echo(click.style(f"Rate limit: {exc}", fg="red"), err=True)
             sys.exit(1)

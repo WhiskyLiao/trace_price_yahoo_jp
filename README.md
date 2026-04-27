@@ -293,21 +293,34 @@ Useful flags:
 | Flag                | Default              | Purpose                                   |
 |---------------------|----------------------|-------------------------------------------|
 | `-k` / `--keyword`  | (empty — all items)  | Narrow within the category                |
-| `--pages`           | `2`                  | Pages to fetch (1–5)                      |
+| `--pages`           | `2`                  | Max pages to fetch (1–200)                |
+| `--all`             | off                  | Fetch every page until the category is exhausted (~50 items per page) |
 | `--include-closed`  | off                  | Also include sold auctions                |
 | `-o` / `--output`   | `kaiju_report.html`  | Output file path                          |
+| `--category-id`     | —                    | Skip path resolution; use this Yahoo ID directly |
+
+The output HTML is **sortable** — click any column header (Title, Price,
+Buy-Now, Bids, Time Left, Condition, Status) to sort ascending; click again
+for descending. Empty cells (e.g. items with no Buy-Now) always sort to the
+end regardless of direction.
 
 Examples:
 
 ```cmd
-:: All items, 2 pages
+:: All items, 2 pages (default)
 python main.py kaiju
+
+:: Fetch the whole category — every page until exhausted
+python main.py kaiju --all
 
 :: Only "ソフビ" within the category, 5 pages, save elsewhere
 python main.py kaiju -k ソフビ --pages 5 -o sofubi.html
 
-:: Include sold listings
-python main.py kaiju --include-closed
+:: Include sold listings + active, every page
+python main.py kaiju --all --include-closed
+
+:: Skip live tree resolution and scrape a known leaf id
+python main.py kaiju --category-id 2084206581
 ```
 
 The path is resolved against the live tree on every run, so no static IDs
