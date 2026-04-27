@@ -21,6 +21,27 @@ _CAPTCHA_MARKERS = ("確認が必要", "お使いのブラウザではご利用�
 # Matches /auction/{id} (relative) and page.auctions.yahoo.co.jp/jp/auction/{id}
 _AUCTION_HREF_RE = re.compile(r"/auction/([A-Za-z0-9]+)")
 
+# Listing-page badge / promo labels that share the same /auction/{id} href as
+# the real title link. Picking one of these as the item title produces rows
+# like "New!!" with no other info, so we skip them when scoring candidates.
+_PROMO_LABEL_RE = re.compile(
+    r"^(New!{0,3}|NEW!{0,3}|急上昇|注目|まもなく終了|残り[^\s　]+|[\d,]+円|送料無料|"
+    r"即決|入札\d+|落札\d+|現在|最高額|残り\s*\d+\s*[時間日分])$"
+)
+
+
+def _looks_like_promo_label(text: str) -> bool:
+    """True for short button/badge text that masquerades as a title link."""
+    t = text.strip()
+    if not t:
+        return True
+    # Anything ≤ 3 chars is almost certainly a label, not a title
+    if len(t) <= 3:
+        return True
+    if _PROMO_LABEL_RE.match(t):
+        return True
+    return False
+
 
 class ScraperError(Exception):
     pass
@@ -177,31 +198,44 @@ def parse_items(soup: BeautifulSoup, *, is_closed: bool = False) -> list[Auction
     names so the parser stays robust across Yahoo Japan HTML changes.
     """
     results: list[AuctionItem] = []
-    seen: set[str] = set()
 
     anchors = soup.find_all("a", href=_AUCTION_HREF_RE)
     logger.debug("Found %d auction anchor tags on page.", len(anchors))
 
+    # Each item card on Yahoo's listing has several anchors with the same
+    # /auction/<id> href (image, title, "New!!" badge, …). Group them by
+    # item_id so we can pick the best title candidate per item instead of
+    # whichever anchor we hit first.
+    anchors_by_id: dict[str, list] = {}
     for anchor in anchors:
-        try:
-            href = anchor.get("href", "")
-            item_id = _extract_item_id(href)
-            if not item_id or item_id in seen:
-                continue
-            seen.add(item_id)
+        item_id = _extract_item_id(anchor.get("href", ""))
+        if item_id:
+            anchors_by_id.setdefault(item_id, []).append(anchor)
 
+    for item_id, item_anchors in anchors_by_id.items():
+        try:
+            primary = item_anchors[0]
+            href = primary.get("href", "")
             item_url = href if href.startswith("http") else urljoin("https://auctions.yahoo.co.jp", href)
 
-            container = _item_container(anchor)
+            container = _item_container(primary)
             text = container.get_text(" ", strip=True)
 
-            # Title: prefer anchor text; fall back to nearest img alt
-            title = anchor.get_text(strip=True)
+            # Title: pick the longest non-promo candidate across this item's
+            # anchors. Each anchor's candidate is its visible text or, if
+            # empty, the alt text of the first image inside it.
+            title = ""
+            for anchor in item_anchors:
+                cand = anchor.get_text(strip=True)
+                if not cand:
+                    img = anchor.find("img")
+                    if img:
+                        cand = img.get("alt", "")
+                if not cand or _looks_like_promo_label(cand):
+                    continue
+                if len(cand) > len(title):
+                    title = cand
             if not title:
-                img = anchor.find("img")
-                if img:
-                    title = img.get("alt", "")
-            if not title or len(title) < 2:
                 continue
 
             current_price, buynow_price = _extract_prices(text)
