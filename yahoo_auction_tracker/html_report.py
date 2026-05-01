@@ -315,25 +315,91 @@ def generate_items_html(
     for it in items:
         esc_title = html.escape(it.title or "")
         esc_url = html.escape(it.item_url or "#")
+        cur = it.current_price if it.current_price is not None else ""
+        buy = it.buynow_price if it.buynow_price is not None else ""
+        bids = it.bid_count if it.bid_count is not None else 0
+        time_left = it.time_remaining or ""
+        cond = it.condition or ""
+        is_closed = bool(getattr(it, "is_closed", False))
+        status_key = "closed" if is_closed else "active"
         rows_html += f"""
         <tr>
-          <td class="title-cell"><a href="{esc_url}" target="_blank" rel="noopener">{esc_title}</a></td>
-          <td class="num">{_fmt_yen(it.current_price)}</td>
-          <td class="num">{_fmt_yen(it.buynow_price)}</td>
-          <td class="num">{it.bid_count or 0}</td>
-          <td>{html.escape(it.time_remaining or "—")}</td>
-          <td>{_condition_badge(it.condition)}</td>
-          <td>{_status_badge(1 if getattr(it, "is_closed", False) else 0)}</td>
+          <td class="title-cell" data-sort="{html.escape(esc_title)}"><a href="{esc_url}" target="_blank" rel="noopener">{esc_title}</a></td>
+          <td class="num" data-sort="{cur}">{_fmt_yen(it.current_price)}</td>
+          <td class="num" data-sort="{buy}">{_fmt_yen(it.buynow_price)}</td>
+          <td class="num" data-sort="{bids}">{bids}</td>
+          <td data-sort="{html.escape(time_left)}">{html.escape(time_left or "—")}</td>
+          <td data-sort="{cond}">{_condition_badge(it.condition)}</td>
+          <td data-sort="{status_key}">{_status_badge(1 if is_closed else 0)}</td>
         </tr>"""
 
     no_data = "" if items else '<p class="no-data">No items found.</p>'
-    table_open = '<div style="overflow-x:auto"><table>' if items else ""
+    table_open = '<div style="overflow-x:auto"><table id="items-table">' if items else ""
     thead = (
-        '<thead><tr><th>Title</th><th class="num">Price</th><th class="num">Buy-Now</th>'
-        '<th class="num">Bids</th><th>Time Left</th><th>Condition</th><th>Status</th></tr>'
-        '</thead><tbody>'
+        '<thead><tr>'
+        '<th class="sortable" data-col="0" data-type="text">Title</th>'
+        '<th class="sortable num" data-col="1" data-type="num">Price</th>'
+        '<th class="sortable num" data-col="2" data-type="num">Buy-Now</th>'
+        '<th class="sortable num" data-col="3" data-type="num">Bids</th>'
+        '<th class="sortable" data-col="4" data-type="text">Time Left</th>'
+        '<th class="sortable" data-col="5" data-type="text">Condition</th>'
+        '<th class="sortable" data-col="6" data-type="text">Status</th>'
+        '</tr></thead><tbody>'
     ) if items else ""
     table_close = "</tbody></table></div>" if items else ""
+
+    # Click-to-sort script. Uses each cell's data-sort attribute as the
+    # sort key; empty values sort to the end regardless of direction.
+    sort_script = """
+    <script>
+      (function () {
+        const table = document.getElementById('items-table');
+        if (!table) return;
+        const tbody = table.querySelector('tbody');
+        const ths = table.querySelectorAll('th.sortable');
+        ths.forEach((th) => {
+          th.addEventListener('click', () => {
+            const col = parseInt(th.dataset.col, 10);
+            const isNum = th.dataset.type === 'num';
+            const prev = th.dataset.dir;
+            const dir = prev === 'asc' ? 'desc' : 'asc';
+            ths.forEach((o) => { delete o.dataset.dir; o.classList.remove('sort-asc','sort-desc'); });
+            th.dataset.dir = dir;
+            th.classList.add('sort-' + dir);
+            const rows = Array.from(tbody.querySelectorAll('tr'));
+            rows.sort((a, b) => {
+              const av = a.children[col].dataset.sort ?? '';
+              const bv = b.children[col].dataset.sort ?? '';
+              const aEmpty = av === '';
+              const bEmpty = bv === '';
+              if (aEmpty && bEmpty) return 0;
+              if (aEmpty) return 1;          // empty always last
+              if (bEmpty) return -1;
+              if (isNum) {
+                const an = Number(av), bn = Number(bv);
+                return dir === 'asc' ? an - bn : bn - an;
+              }
+              const cmp = String(av).localeCompare(String(bv), 'ja');
+              return dir === 'asc' ? cmp : -cmp;
+            });
+            const frag = document.createDocumentFragment();
+            rows.forEach((r) => frag.appendChild(r));
+            tbody.appendChild(frag);
+          });
+        });
+      })();
+    </script>"""
+
+    sortable_css = """
+    th.sortable { cursor: pointer; user-select: none; position: relative; }
+    th.sortable:hover { color: #2563eb; }
+    th.sortable::after { content: ''; display: inline-block; width: 0; height: 0;
+                         margin-left: 6px; vertical-align: middle; opacity: .4;
+                         border-left: 4px solid transparent; border-right: 4px solid transparent;
+                         border-top: 5px solid #94a3b8; border-bottom: 0; }
+    th.sortable.sort-asc::after  { border-top: 0; border-bottom: 5px solid #2563eb; opacity: 1; }
+    th.sortable.sort-desc::after { border-top: 5px solid #2563eb; border-bottom: 0; opacity: 1; }
+    """
 
     return f"""<!DOCTYPE html>
 <html lang="ja">
@@ -387,6 +453,7 @@ def generate_items_html(
     .no-data {{ color: #94a3b8; font-style: italic; padding: 1rem 0; }}
     footer {{ text-align: center; color: #94a3b8; font-size: .8rem; margin-top: 2rem; }}
     @media (max-width: 640px) {{ td.title-cell {{ max-width: 200px; }} }}
+    {sortable_css}
   </style>
 </head>
 <body>
@@ -417,5 +484,6 @@ def generate_items_html(
 
     <footer>Yahoo Japan Auction Price Tracker &nbsp;·&nbsp; Data sourced from auctions.yahoo.co.jp</footer>
   </div>
+  {sort_script}
 </body>
 </html>"""
