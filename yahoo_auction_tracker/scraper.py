@@ -30,13 +30,32 @@ _PROMO_LABEL_RE = re.compile(
 )
 
 
+_SHORT_LABEL_WORDS = {
+    "新品", "中古", "未使用", "傷あり", "終了",
+    "急上昇", "注目", "即決", "現在", "落札",
+    # Single-kanji condition-ish labels Yahoo sometimes shows alone:
+    "本", "可", "良",
+}
+
+
 def _looks_like_promo_label(text: str) -> bool:
-    """True for short button/badge text that masquerades as a title link."""
+    """True for short button/badge text that masquerades as a title link.
+
+    Length alone isn't enough to disqualify — many kaiju items have a
+    bare 3-char title like ゴジラ / モスラ / ガメラ. So we drop the
+    raw length cutoff and keep an explicit allow/deny list:
+    - empty / whitespace → promo
+    - 1 char → almost certainly a badge
+    - exact match against known short labels (新品, 中古, 急上昇, ...) → promo
+    - matches the broader _PROMO_LABEL_RE (New!!, ¥-suffix, "残り…") → promo
+    Anything else passes, even if short.
+    """
     t = text.strip()
     if not t:
         return True
-    # Anything ≤ 3 chars is almost certainly a label, not a title
-    if len(t) <= 3:
+    if len(t) == 1:
+        return True
+    if t in _SHORT_LABEL_WORDS:
         return True
     if _PROMO_LABEL_RE.match(t):
         return True
