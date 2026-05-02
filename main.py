@@ -672,37 +672,42 @@ def kaiju(
         scope = "all pages" if fetch_all else f"up to {max_pages} page(s)"
         items: list = []
         seen_item_ids: set[str] = set()
-        try:
-            for idx, cat in enumerate(cats_to_scrape, 1):
-                tag = f"[{idx}/{len(cats_to_scrape)}]"
-                click.echo(f"{tag} Fetching active in {cat.name} [{cat.id}] ({scope})…")
+        # Per-category errors are warnings, not fatal — one sub-category
+        # 500'ing past its offset cap shouldn't drop the items we've
+        # already collected from the others.
+        for idx, cat in enumerate(cats_to_scrape, 1):
+            tag = f"[{idx}/{len(cats_to_scrape)}]"
+
+            click.echo(f"{tag} Fetching active in {cat.name} [{cat.id}] ({scope})…")
+            try:
                 got = search_active(session, keyword, cat.id, max_pages=max_pages)
-                added = 0
-                for it in got:
+            except (RateLimitError, ScraperError) as exc:
+                click.echo(click.style(f"{tag}   skipped active: {exc}", fg="yellow"), err=True)
+                got = []
+            added = 0
+            for it in got:
+                if it.item_id in seen_item_ids:
+                    continue
+                seen_item_ids.add(it.item_id)
+                items.append(it)
+                added += 1
+            click.echo(f"{tag}   active: {len(got)} fetched, {added} new (running total: {len(items)})")
+
+            if include_closed:
+                click.echo(f"{tag} Fetching closed in {cat.name} [{cat.id}] ({scope})…")
+                try:
+                    got_c = search_closed(session, keyword, cat.id, max_pages=max_pages)
+                except (RateLimitError, ScraperError) as exc:
+                    click.echo(click.style(f"{tag}   skipped closed: {exc}", fg="yellow"), err=True)
+                    got_c = []
+                added_c = 0
+                for it in got_c:
                     if it.item_id in seen_item_ids:
                         continue
                     seen_item_ids.add(it.item_id)
                     items.append(it)
-                    added += 1
-                click.echo(f"{tag}   active: {len(got)} fetched, {added} new (running total: {len(items)})")
-
-                if include_closed:
-                    click.echo(f"{tag} Fetching closed in {cat.name} [{cat.id}] ({scope})…")
-                    got_c = search_closed(session, keyword, cat.id, max_pages=max_pages)
-                    added_c = 0
-                    for it in got_c:
-                        if it.item_id in seen_item_ids:
-                            continue
-                        seen_item_ids.add(it.item_id)
-                        items.append(it)
-                        added_c += 1
-                    click.echo(f"{tag}   closed: {len(got_c)} fetched, {added_c} new (running total: {len(items)})")
-        except RateLimitError as exc:
-            click.echo(click.style(f"Rate limit: {exc}", fg="red"), err=True)
-            sys.exit(1)
-        except ScraperError as exc:
-            click.echo(click.style(f"Scraper error: {exc}", fg="red"), err=True)
-            sys.exit(1)
+                    added_c += 1
+                click.echo(f"{tag}   closed: {len(got_c)} fetched, {added_c} new (running total: {len(items)})")
     finally:
         session.close()
 
