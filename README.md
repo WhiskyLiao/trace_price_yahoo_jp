@@ -299,10 +299,11 @@ Useful flags:
 | `-o` / `--output`   | `kaiju_report.html`  | Output file path                          |
 | `--category-id`     | —                    | Skip path resolution; use this Yahoo ID directly |
 
-The output HTML is **sortable** — click any column header (Title, Price,
-Buy-Now, Bids, Time Left, Condition, Status) to sort ascending; click again
-for descending. Empty cells (e.g. items with no Buy-Now) always sort to the
-end regardless of direction.
+The output HTML is **sortable** — a quick-sort bar above the table has dedicated
+buttons for **Price** and **Bids** (Low → High / High → Low). Any column header
+(Title, Price, Buy-Now, Bids, Time Left, Condition, Status) is also clickable
+to sort ascending; click again for descending. Empty cells (e.g. items with no
+Buy-Now) always sort to the end regardless of direction.
 
 Examples:
 

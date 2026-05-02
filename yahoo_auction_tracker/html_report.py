@@ -350,41 +350,61 @@ def generate_items_html(
 
     # Click-to-sort script. Uses each cell's data-sort attribute as the
     # sort key; empty values sort to the end regardless of direction.
+    # Quick-sort buttons above the table also dispatch into sortBy().
     sort_script = """
     <script>
       (function () {
         const table = document.getElementById('items-table');
         if (!table) return;
         const tbody = table.querySelector('tbody');
-        const ths = table.querySelectorAll('th.sortable');
+        const ths = Array.from(table.querySelectorAll('th.sortable'));
+
+        function sortBy(col, dir) {
+          const th = ths.find((t) => parseInt(t.dataset.col, 10) === col);
+          if (!th) return;
+          const isNum = th.dataset.type === 'num';
+          ths.forEach((o) => { delete o.dataset.dir; o.classList.remove('sort-asc','sort-desc'); });
+          th.dataset.dir = dir;
+          th.classList.add('sort-' + dir);
+          const rows = Array.from(tbody.querySelectorAll('tr'));
+          rows.sort((a, b) => {
+            const av = a.children[col].dataset.sort ?? '';
+            const bv = b.children[col].dataset.sort ?? '';
+            const aEmpty = av === '';
+            const bEmpty = bv === '';
+            if (aEmpty && bEmpty) return 0;
+            if (aEmpty) return 1;          // empty always last
+            if (bEmpty) return -1;
+            if (isNum) {
+              const an = Number(av), bn = Number(bv);
+              return dir === 'asc' ? an - bn : bn - an;
+            }
+            const cmp = String(av).localeCompare(String(bv), 'ja');
+            return dir === 'asc' ? cmp : -cmp;
+          });
+          const frag = document.createDocumentFragment();
+          rows.forEach((r) => frag.appendChild(r));
+          tbody.appendChild(frag);
+
+          // Reflect active state on the quick-sort buttons too.
+          document.querySelectorAll('.sort-btn').forEach((b) => b.classList.remove('active'));
+          const btn = document.querySelector(`.sort-btn[data-col="${col}"][data-dir="${dir}"]`);
+          if (btn) btn.classList.add('active');
+        }
+
+        // Header clicks toggle direction.
         ths.forEach((th) => {
           th.addEventListener('click', () => {
             const col = parseInt(th.dataset.col, 10);
-            const isNum = th.dataset.type === 'num';
-            const prev = th.dataset.dir;
-            const dir = prev === 'asc' ? 'desc' : 'asc';
-            ths.forEach((o) => { delete o.dataset.dir; o.classList.remove('sort-asc','sort-desc'); });
-            th.dataset.dir = dir;
-            th.classList.add('sort-' + dir);
-            const rows = Array.from(tbody.querySelectorAll('tr'));
-            rows.sort((a, b) => {
-              const av = a.children[col].dataset.sort ?? '';
-              const bv = b.children[col].dataset.sort ?? '';
-              const aEmpty = av === '';
-              const bEmpty = bv === '';
-              if (aEmpty && bEmpty) return 0;
-              if (aEmpty) return 1;          // empty always last
-              if (bEmpty) return -1;
-              if (isNum) {
-                const an = Number(av), bn = Number(bv);
-                return dir === 'asc' ? an - bn : bn - an;
-              }
-              const cmp = String(av).localeCompare(String(bv), 'ja');
-              return dir === 'asc' ? cmp : -cmp;
-            });
-            const frag = document.createDocumentFragment();
-            rows.forEach((r) => frag.appendChild(r));
-            tbody.appendChild(frag);
+            const dir = th.dataset.dir === 'asc' ? 'desc' : 'asc';
+            sortBy(col, dir);
+          });
+        });
+
+        // Explicit quick-sort buttons (Price / Bids × asc / desc).
+        document.querySelectorAll('.sort-btn').forEach((btn) => {
+          btn.addEventListener('click', () => {
+            sortBy(parseInt(btn.dataset.col, 10), btn.dataset.dir);
           });
         });
       })();
@@ -399,7 +419,37 @@ def generate_items_html(
                          border-top: 5px solid #94a3b8; border-bottom: 0; }
     th.sortable.sort-asc::after  { border-top: 0; border-bottom: 5px solid #2563eb; opacity: 1; }
     th.sortable.sort-desc::after { border-top: 5px solid #2563eb; border-bottom: 0; opacity: 1; }
+
+    .sort-bar { display: flex; flex-wrap: wrap; gap: .4rem; align-items: center;
+                margin-bottom: 1rem; font-size: .85rem; }
+    .sort-bar .label { color: #64748b; font-weight: 600; margin-right: .25rem; }
+    .sort-bar .group { display: inline-flex; border: 1px solid #e2e8f0; border-radius: 8px;
+                       overflow: hidden; background: #fff; }
+    .sort-bar .group .group-label { padding: .35rem .65rem; background: #f8fafc;
+                                    color: #64748b; border-right: 1px solid #e2e8f0;
+                                    font-weight: 600; }
+    .sort-btn { padding: .35rem .7rem; background: #fff; color: #1e293b; border: 0;
+                cursor: pointer; font-size: .85rem; line-height: 1.2;
+                font-family: inherit; }
+    .sort-btn + .sort-btn { border-left: 1px solid #e2e8f0; }
+    .sort-btn:hover { background: #f1f5f9; }
+    .sort-btn.active { background: #2563eb; color: #fff; }
     """
+
+    sort_bar_html = '''
+      <div class="sort-bar">
+        <span class="label">Sort:</span>
+        <span class="group">
+          <span class="group-label">Price</span>
+          <button class="sort-btn" data-col="1" data-dir="asc">Low → High ↑</button>
+          <button class="sort-btn" data-col="1" data-dir="desc">High → Low ↓</button>
+        </span>
+        <span class="group">
+          <span class="group-label">Bids</span>
+          <button class="sort-btn" data-col="3" data-dir="asc">Low → High ↑</button>
+          <button class="sort-btn" data-col="3" data-dir="desc">High → Low ↓</button>
+        </span>
+      </div>''' if items else ''
 
     return f"""<!DOCTYPE html>
 <html lang="ja">
@@ -476,6 +526,7 @@ def generate_items_html(
 
     <div class="card">
       {no_data}
+      {sort_bar_html}
       {table_open}
       {thead}
       {rows_html}
