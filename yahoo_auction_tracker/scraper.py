@@ -189,26 +189,65 @@ def _to_int(num_str: str) -> Optional[int]:
     return int(raw) if raw.isdigit() else None
 
 
+# Yahoo prefixes each price on a listing card with a Japanese label that
+# tells us what kind of price it is. We use the label to route prices to
+# current / buynow / discard, instead of blindly grabbing the first two
+# yen tokens (which previously caused 送料 ¥800 — shipping — to be
+# rendered as the Buy-Now price for items without 即決).
+_LABEL_TO_KIND = {
+    "現在":     "current",
+    "落札":     "current",   # closed auctions: final winning bid
+    "即決":     "buynow",
+    "希望落札": "buynow",
+    "希望価格": "buynow",
+    "送料":     "skip",       # shipping fee — not a buy/bid price
+    "開始":     "skip",       # starting price — not "current"
+    "開始価格": "skip",
+    "最低":     "skip",       # minimum bid in some layouts
+}
+# Order labels longest-first so the regex doesn't match "現在" inside
+# a longer label like "現在の価格".
+_LABEL_PATTERN = "|".join(sorted(_LABEL_TO_KIND.keys(), key=len, reverse=True))
+_LABELED_PRICE_RE = re.compile(
+    rf"({_LABEL_PATTERN})\s*[:：]?\s*(?:[¥￥]\s*(?P<a>[\d,]+)|(?P<b>[\d,]+)\s*円)"
+)
+
+
 def _extract_prices(text: str) -> tuple[Optional[int], Optional[int]]:
     """Return (current_price, buynow_price) parsed from container text.
 
-    Yahoo formats prices either with a leading yen sign (¥3,500) or a
-    trailing 円 (3,500円); we accept both. The first occurrence is the
-    current price, the second (if any) is the Buy-Now price. Duplicate
-    consecutive matches (e.g. when the yen sign appears next to the same
-    number twice in markup) are deduped.
+    Yahoo's listing card emits each price prefixed by a label in Japanese
+    (現在 / 落札 / 即決 / 送料 / 開始 / …). We walk those labeled tokens
+    and route each to the right slot. Shipping (送料) and starting price
+    (開始) are explicitly skipped so they can't bleed into Buy-Now.
+
+    If the page has no recognised labels (rare, but possible if Yahoo
+    restructures markup), we fall back to taking the *first* unlabeled
+    price as the current price only — never Buy-Now — to avoid the old
+    bug where the second yen token (often shipping) was misclassified.
     """
-    seen: list[int] = []
-    for m in _PRICE_TOKEN_RE.finditer(text):
+    current: Optional[int] = None
+    buynow: Optional[int] = None
+    saw_label = False
+    for m in _LABELED_PRICE_RE.finditer(text):
+        saw_label = True
+        kind = _LABEL_TO_KIND.get(m.group(1), "skip")
+        if kind == "skip":
+            continue
         n = _to_int(m.group("a") or m.group("b") or "")
         if n is None:
             continue
-        if seen and seen[-1] == n:
-            continue  # likely the same price re-rendered (e.g. ¥3,500 3,500円)
-        seen.append(n)
-        if len(seen) >= 2:
-            break
-    return (seen[0] if seen else None, seen[1] if len(seen) > 1 else None)
+        if kind == "current" and current is None:
+            current = n
+        elif kind == "buynow" and buynow is None:
+            buynow = n
+
+    if not saw_label and current is None and buynow is None:
+        first = _PRICE_TOKEN_RE.search(text)
+        if first is not None:
+            current = _to_int(first.group("a") or first.group("b") or "")
+
+    return current, buynow
 
 
 def _parse_condition(text: str) -> Optional[str]:
