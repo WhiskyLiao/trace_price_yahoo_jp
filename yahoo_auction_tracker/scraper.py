@@ -348,6 +348,7 @@ def _paginate(
     max_pages: int,
     delay: float,
     is_closed: bool,
+    extra_params: Optional[dict] = None,
 ) -> list[AuctionItem]:
     items_per_page = DEFAULT_SETTINGS["items_per_page"]
     all_items: list[AuctionItem] = []
@@ -367,6 +368,8 @@ def _paginate(
         }
         if category_id and not auccat_failed:
             params["auccat"] = category_id
+        if extra_params:
+            params.update(extra_params)
 
         logger.debug("Fetching page %d | params: %s", page + 1, params)
 
@@ -420,10 +423,12 @@ def search_active(
     *,
     max_pages: int = DEFAULT_SETTINGS["max_pages"],
     delay: float = DEFAULT_SETTINGS["request_delay_seconds"],
+    extra_params: Optional[dict] = None,
 ) -> list[AuctionItem]:
     return _paginate(
         session, BASE_SEARCH_URL, keyword, category_id,
         max_pages=max_pages, delay=delay, is_closed=False,
+        extra_params=extra_params,
     )
 
 
@@ -434,8 +439,10 @@ def search_closed(
     *,
     max_pages: int = DEFAULT_SETTINGS["max_pages"],
     delay: float = DEFAULT_SETTINGS["request_delay_seconds"],
+    extra_params: Optional[dict] = None,
 ) -> list[AuctionItem]:
     return _paginate(
         session, CLOSED_SEARCH_URL, keyword, category_id,
         max_pages=max_pages, delay=delay, is_closed=True,
+        extra_params=extra_params,
     )
