@@ -647,43 +647,39 @@ def kaiju(
                 sys.exit(1)
         click.echo(f"  → leaf: {leaf.name} [{leaf.id}]")
 
-        # Build the list of categories to scrape. With --all we walk every
-        # subcategory under the leaf (BFS, depth ≤ 2) — Yahoo caps each
-        # search at ~7,500 items, so a category like ゴジラ、怪獣 (~14k
-        # items) needs to be scraped per child to surface everything.
-        cats_to_scrape: list[CategoryNode] = [leaf]
+        # All scraping stays inside the leaf category (auccat=<leaf.id>) so
+        # nothing from sibling/parent categories can leak in.
+        # Yahoo caps each individual search at ~7,500 items. A leaf like
+        # ゴジラ、怪獣 (~14k items) won't fit in one search, so when --all
+        # is set we slice the search by current-price ranges. Each chunk
+        # is independently capped at 7,500 by Yahoo, but the union (after
+        # de-dup by item_id) covers everything in the category.
+        # The previous BFS-into-sub-categories approach was abandoned
+        # because Yahoo's category sidebar exposes parent / sibling links
+        # alongside true children, and we couldn't tell them apart from
+        # static HTML — so we'd accidentally scrape unrelated categories.
         if fetch_all:
-            click.echo("Walking sub-categories under the leaf…")
-            queue: list[tuple[CategoryNode, int]] = [(leaf, 0)]
-            seen_cat_ids: set[str] = {leaf.id}
-            while queue:
-                parent, depth = queue.pop(0)
-                if depth >= 2:
-                    continue
-                subs = fetch_subcategories(session, parent.id)
-                for s in subs:
-                    if s.id in seen_cat_ids:
-                        continue
-                    seen_cat_ids.add(s.id)
-                    cats_to_scrape.append(s)
-                    queue.append((s, depth + 1))
-            click.echo(f"  → {len(cats_to_scrape)} category/sub-category(s) to scrape")
+            chunks: list[tuple[Optional[int], Optional[int], str]] = [
+                (None,    1000,  "¥0–999"),
+                (1000,    3000,  "¥1,000–2,999"),
+                (3000,    7000,  "¥3,000–6,999"),
+                (7000,   15000,  "¥7,000–14,999"),
+                (15000,  50000,  "¥15,000–49,999"),
+                (50000,   None,  "¥50,000+"),
+            ]
+        else:
+            chunks = [(None, None, "all prices (single chunk)")]
 
         scope = "all pages" if fetch_all else f"up to {max_pages} page(s)"
         items: list = []
         seen_item_ids: set[str] = set()
-        # Per-category errors are warnings, not fatal — one sub-category
-        # 500'ing past its offset cap shouldn't drop the items we've
-        # already collected from the others.
-        for idx, cat in enumerate(cats_to_scrape, 1):
-            tag = f"[{idx}/{len(cats_to_scrape)}]"
 
-            click.echo(f"{tag} Fetching active in {cat.name} [{cat.id}] ({scope})…")
+        def _do(label: str, fn, extra: dict, prefix: str) -> None:
             try:
-                got = search_active(session, keyword, cat.id, max_pages=max_pages)
+                got = fn(session, keyword, leaf.id, max_pages=max_pages, extra_params=extra)
             except (RateLimitError, ScraperError) as exc:
-                click.echo(click.style(f"{tag}   skipped active: {exc}", fg="yellow"), err=True)
-                got = []
+                click.echo(click.style(f"{prefix} skipped {label}: {exc}", fg="yellow"), err=True)
+                return
             added = 0
             for it in got:
                 if it.item_id in seen_item_ids:
@@ -691,23 +687,20 @@ def kaiju(
                 seen_item_ids.add(it.item_id)
                 items.append(it)
                 added += 1
-            click.echo(f"{tag}   active: {len(got)} fetched, {added} new (running total: {len(items)})")
+            click.echo(f"{prefix} {label}: {len(got)} fetched, {added} new (running total: {len(items)})")
 
+        for idx, (lo, hi, label) in enumerate(chunks, 1):
+            tag = f"[{idx}/{len(chunks)}]"
+            extra: dict = {}
+            if lo is not None:
+                extra["aucminprice"] = lo
+            if hi is not None:
+                extra["aucmaxprice"] = hi - 1  # aucmaxprice is inclusive
+
+            click.echo(f"{tag} {label} ({scope})…")
+            _do("active", search_active, extra, f"{tag}  ")
             if include_closed:
-                click.echo(f"{tag} Fetching closed in {cat.name} [{cat.id}] ({scope})…")
-                try:
-                    got_c = search_closed(session, keyword, cat.id, max_pages=max_pages)
-                except (RateLimitError, ScraperError) as exc:
-                    click.echo(click.style(f"{tag}   skipped closed: {exc}", fg="yellow"), err=True)
-                    got_c = []
-                added_c = 0
-                for it in got_c:
-                    if it.item_id in seen_item_ids:
-                        continue
-                    seen_item_ids.add(it.item_id)
-                    items.append(it)
-                    added_c += 1
-                click.echo(f"{tag}   closed: {len(got_c)} fetched, {added_c} new (running total: {len(items)})")
+                _do("closed", search_closed, extra, f"{tag}  ")
     finally:
         session.close()
 
