@@ -34,7 +34,13 @@ from yahoo_auction_tracker.scraper import (
     search_active,
     search_closed,
 )
-from yahoo_auction_tracker.category_browser import interactive_browse, lookup_live_id, resolve_path
+from yahoo_auction_tracker.category_browser import (
+    CategoryNode,
+    fetch_subcategories,
+    interactive_browse,
+    lookup_live_id,
+    resolve_path,
+)
 from yahoo_auction_tracker.html_report import generate_html, generate_items_html
 from yahoo_auction_tracker.tracker import AuctionTracker, get_japan_time
 
@@ -641,13 +647,56 @@ def kaiju(
                 sys.exit(1)
         click.echo(f"  → leaf: {leaf.name} [{leaf.id}]")
 
+        # Build the list of categories to scrape. With --all we walk every
+        # subcategory under the leaf (BFS, depth ≤ 2) — Yahoo caps each
+        # search at ~7,500 items, so a category like ゴジラ、怪獣 (~14k
+        # items) needs to be scraped per child to surface everything.
+        cats_to_scrape: list[CategoryNode] = [leaf]
+        if fetch_all:
+            click.echo("Walking sub-categories under the leaf…")
+            queue: list[tuple[CategoryNode, int]] = [(leaf, 0)]
+            seen_cat_ids: set[str] = {leaf.id}
+            while queue:
+                parent, depth = queue.pop(0)
+                if depth >= 2:
+                    continue
+                subs = fetch_subcategories(session, parent.id)
+                for s in subs:
+                    if s.id in seen_cat_ids:
+                        continue
+                    seen_cat_ids.add(s.id)
+                    cats_to_scrape.append(s)
+                    queue.append((s, depth + 1))
+            click.echo(f"  → {len(cats_to_scrape)} category/sub-category(s) to scrape")
+
         scope = "all pages" if fetch_all else f"up to {max_pages} page(s)"
-        click.echo(f"Fetching active auctions ({scope})…")
+        items: list = []
+        seen_item_ids: set[str] = set()
         try:
-            items = search_active(session, keyword, leaf.id, max_pages=max_pages)
-            if include_closed:
-                click.echo(f"Fetching closed auctions ({scope})…")
-                items = items + search_closed(session, keyword, leaf.id, max_pages=max_pages)
+            for idx, cat in enumerate(cats_to_scrape, 1):
+                tag = f"[{idx}/{len(cats_to_scrape)}]"
+                click.echo(f"{tag} Fetching active in {cat.name} [{cat.id}] ({scope})…")
+                got = search_active(session, keyword, cat.id, max_pages=max_pages)
+                added = 0
+                for it in got:
+                    if it.item_id in seen_item_ids:
+                        continue
+                    seen_item_ids.add(it.item_id)
+                    items.append(it)
+                    added += 1
+                click.echo(f"{tag}   active: {len(got)} fetched, {added} new (running total: {len(items)})")
+
+                if include_closed:
+                    click.echo(f"{tag} Fetching closed in {cat.name} [{cat.id}] ({scope})…")
+                    got_c = search_closed(session, keyword, cat.id, max_pages=max_pages)
+                    added_c = 0
+                    for it in got_c:
+                        if it.item_id in seen_item_ids:
+                            continue
+                        seen_item_ids.add(it.item_id)
+                        items.append(it)
+                        added_c += 1
+                    click.echo(f"{tag}   closed: {len(got_c)} fetched, {added_c} new (running total: {len(items)})")
         except RateLimitError as exc:
             click.echo(click.style(f"Rate limit: {exc}", fg="red"), err=True)
             sys.exit(1)
