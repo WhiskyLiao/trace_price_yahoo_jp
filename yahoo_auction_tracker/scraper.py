@@ -156,6 +156,13 @@ def fetch_page(
         raise ScraperError(f"Timeout fetching {url}") from exc
     except requests.ConnectionError as exc:
         raise ScraperError(f"Connection error fetching {url}") from exc
+    except requests.RequestException as exc:
+        # Catches RetryError (urllib3 max-retries on 5xx), TooManyRedirects,
+        # and anything else requests raises. Without this, a category that
+        # 500s past its offset cap propagates an unhandled RetryError up
+        # through _paginate and kills the whole BFS, dropping every item
+        # collected so far.
+        raise ScraperError(f"Request failed for {url}: {exc}") from exc
     _check_blocked(resp)
     return BeautifulSoup(resp.text, "html.parser")
 
