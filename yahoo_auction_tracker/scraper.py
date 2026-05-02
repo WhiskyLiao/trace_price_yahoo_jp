@@ -151,15 +151,38 @@ def _parse_yen(text: str) -> Optional[int]:
     return int(cleaned) if cleaned.isdigit() else None
 
 
+# Matches a price token in any of the forms Yahoo Japan uses on listing pages:
+#   ¥3,500   ￥3,500   3,500円   即決 3,500 円   100,000円
+# Captures the digit/comma part as group "a" or "b". Allows optional
+# whitespace between the number and 円.
+_PRICE_TOKEN_RE = re.compile(r"(?:[¥￥]\s*(?P<a>[\d,]+)|(?P<b>[\d,]+)\s*円)")
+
+
+def _to_int(num_str: str) -> Optional[int]:
+    raw = num_str.replace(",", "").replace(",", "").strip()
+    return int(raw) if raw.isdigit() else None
+
+
 def _extract_prices(text: str) -> tuple[Optional[int], Optional[int]]:
-    """Return (current_price, buynow_price) parsed from container text."""
-    hits = re.findall(r"[¥￥]([\d,]+)", text)
-    prices = []
-    for h in hits:
-        raw = h.replace(",", "")
-        if raw.isdigit():
-            prices.append(int(raw))
-    return (prices[0] if prices else None, prices[1] if len(prices) > 1 else None)
+    """Return (current_price, buynow_price) parsed from container text.
+
+    Yahoo formats prices either with a leading yen sign (¥3,500) or a
+    trailing 円 (3,500円); we accept both. The first occurrence is the
+    current price, the second (if any) is the Buy-Now price. Duplicate
+    consecutive matches (e.g. when the yen sign appears next to the same
+    number twice in markup) are deduped.
+    """
+    seen: list[int] = []
+    for m in _PRICE_TOKEN_RE.finditer(text):
+        n = _to_int(m.group("a") or m.group("b") or "")
+        if n is None:
+            continue
+        if seen and seen[-1] == n:
+            continue  # likely the same price re-rendered (e.g. ¥3,500 3,500円)
+        seen.append(n)
+        if len(seen) >= 2:
+            break
+    return (seen[0] if seen else None, seen[1] if len(seen) > 1 else None)
 
 
 def _parse_condition(text: str) -> Optional[str]:
@@ -240,11 +263,14 @@ def parse_items(soup: BeautifulSoup, *, is_closed: bool = False) -> list[Auction
 
             current_price, buynow_price = _extract_prices(text)
 
-            bid_m = re.search(r"(\d+)\s*入札", text)
-            bid_count = int(bid_m.group(1)) if bid_m else 0
+            # Bid count: Yahoo writes this as "5 入札", "入札5", "入札 5回",
+            # "入札数5" etc. — accept any digit run on either side of 入札.
+            bid_m = re.search(r"(?:入札[数件]?\s*(\d+)|(\d+)\s*入札)", text)
+            bid_count = int(bid_m.group(1) or bid_m.group(2)) if bid_m else 0
 
-            time_m = re.search(r"(残り[^\s　]{1,15})", text)
-            time_remaining = time_m.group(1) if time_m else None
+            # Time remaining: "残り 2日", "残り5時間", "残り 30分" etc.
+            time_m = re.search(r"残り\s*(\d+\s*(?:日|時間|分|秒)(?:\s*\d+\s*(?:時間|分|秒))?)", text)
+            time_remaining = ("残り" + time_m.group(1).strip()) if time_m else None
 
             condition = _parse_condition(text)
 
