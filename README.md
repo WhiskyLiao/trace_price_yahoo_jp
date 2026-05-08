@@ -169,11 +169,20 @@ The category tree is **cached locally** (`categories_cache.json`) for 7 days, so
 Yahoo Japan rotates category IDs occasionally, so the static IDs shipped in
 `config.py` will eventually go stale. To handle this transparently:
 
-- Every `search`, `track`, and scheduled run looks up the alias in
-  `categories_cache.json` and uses the **current live ID** for that
+- Every `search`, `track`, `kaiju`, and scheduled run looks up the alias
+  in `categories_cache.json` and uses the **current live ID** for that
   category's Japanese name.
 - The cache auto-refreshes from Yahoo when missing or older than 7 days —
-  no need to run `browse` first.
+  no need to run `browse` first. If a previously cached file contains
+  noise (e.g. only `＋条件指定` from a JS-rendered page) the loader
+  treats it as a miss and re-fetches automatically.
+- The live category fetch tries multiple URLs in order
+  (`search?p=の` → `category/list` → `/`) and merges the result with a
+  static fallback set, so resolving common paths still works when Yahoo's
+  main page is JS-only.
+- Names are matched tolerantly: `・` ↔ `、` separators, ASCII / full-width
+  colons, and trailing item-count suffixes like `おもちゃ、ゲーム(781,120)`
+  are all normalised before comparison.
 - If the live ID differs from the static one, you'll see a one-line note:
   `Note: category 'cameras' ID refreshed 2084020887 → <new>`.
 - Numeric `--category 1234567` IDs pass through untouched.
@@ -294,39 +303,77 @@ Useful flags:
 |---------------------|----------------------|-------------------------------------------|
 | `-k` / `--keyword`  | (empty — all items)  | Narrow within the category                |
 | `--pages`           | `2`                  | Max pages to fetch (1–200)                |
-| `--all`             | off                  | Fetch every page until the category is exhausted (~50 items per page) |
+| `--all`             | off                  | Sweep the whole category by splitting across 6 price chunks (see below) |
 | `--include-closed`  | off                  | Also include sold auctions                |
 | `-o` / `--output`   | `kaiju_report.html`  | Output file path                          |
+| `--cache`           | `categories_cache.json` | Path to the local category cache file  |
 | `--category-id`     | —                    | Skip path resolution; use this Yahoo ID directly |
 
-The output HTML is **sortable** — a quick-sort bar above the table has dedicated
-buttons for **Price** and **Bids** (Low → High / High → Low). Any column header
-(Title, Price, Buy-Now, Bids, Time Left, Condition, Status) is also clickable
-to sort ascending; click again for descending. Empty cells (e.g. items with no
-Buy-Now) always sort to the end regardless of direction.
+### Why `--all` chunks by price
 
-Examples:
+Yahoo Japan's auction search caps any single result set at roughly
+**7,500 items**, so for a busy leaf like ゴジラ、怪獣 (~14k items at the
+time of writing) one straight scrape only surfaces about half the
+inventory. With `--all`, the kaiju command keeps `auccat=<leaf>` fixed
+(so nothing from sibling/parent categories can leak in) and slices the
+search into six current-price ranges instead:
+
+| #  | Range            |
+|----|------------------|
+| 1  | ¥0 – ¥999        |
+| 2  | ¥1,000 – ¥2,999  |
+| 3  | ¥3,000 – ¥6,999  |
+| 4  | ¥7,000 – ¥14,999 |
+| 5  | ¥15,000 – ¥49,999|
+| 6  | ¥50,000 +        |
+
+Each chunk is independently capped at 7,500 by Yahoo, but their union
+(de‑duplicated by item id) covers the full price spectrum. Any chunk
+that hits Yahoo's offset wall (rare ≥¥0 chunks past ~15k items) prints a
+yellow warning and the run continues with the next chunk — items already
+collected are kept and saved to the report.
+
+### Sortable HTML output
+
+The output HTML is **sortable**:
+
+- A quick-sort bar above the table has dedicated buttons for **Price**
+  and **Bids** (Low → High / High → Low).
+- Any column header (Title, Price, Buy-Now, Bids, Time Left, Condition,
+  Status) is also clickable — first click sorts ascending, second click
+  flips to descending.
+- Empty cells (e.g. items with no Buy-Now) always sort to the end
+  regardless of direction.
+
+Prices are read from each item's labelled fields, so the table strictly
+shows `現在` / `落札` for **Price** and `即決` for **Buy-Now**. `送料`
+(shipping) and `開始` (starting price) are explicitly skipped — they
+will never appear in the price columns.
+
+### Examples
 
 ```cmd
-:: All items, 2 pages (default)
+:: First 2 pages of the leaf (fast, default)
 python main.py kaiju
 
-:: Fetch the whole category — every page until exhausted
+:: Whole category — 6 price-chunked sweeps, ~few minutes
 python main.py kaiju --all
 
-:: Only "ソフビ" within the category, 5 pages, save elsewhere
+:: Only "ソフビ" within the category, 5 pages, custom output path
 python main.py kaiju -k ソフビ --pages 5 -o sofubi.html
 
-:: Include sold listings + active, every page
+:: Active + sold, full sweep
 python main.py kaiju --all --include-closed
 
 :: Skip live tree resolution and scrape a known leaf id
 python main.py kaiju --category-id 2084206581
 ```
 
-The path is resolved against the live tree on every run, so no static IDs
-to maintain — if Yahoo rotates the leaf, the next run picks up the new ID
-automatically.
+The path is resolved against the live tree on every run, so no static
+IDs to maintain — if Yahoo rotates the leaf, the next run picks up the
+new ID automatically. If the live walk fails, delete
+`categories_cache.json` to force a fresh fetch, or fall back to
+`--category-id <ID>` (find the ID via `python main.py browse`).
 
 ---
 
@@ -358,8 +405,9 @@ covered by `.gitignore`:
 | File                       | Created by               | Purpose                                |
 |----------------------------|--------------------------|----------------------------------------|
 | `auction_tracker.db`       | `track`, `list`, `delete`| SQLite price history database          |
-| `categories_cache.json`    | `browse`                 | Local category tree cache (7-day TTL)  |
+| `categories_cache.json`    | `browse`, `search`, `track`, `kaiju` | Local category tree cache (7-day TTL; auto-pruned if it contains stale/noise entries) |
 | `<keyword>_report.html`    | `report --format html`   | Standalone HTML report                 |
+| `kaiju_report.html`        | `kaiju`                  | Self-contained sortable items report (kaiju shortcut) |
 | `tracker.log`              | cron example in this README | Schedule run output                 |
 
 ---
@@ -378,4 +426,17 @@ covered by `.gitignore`:
 ## Notes
 
 - Requests are throttled to ~1.5 s between pages.
-- For personal research use only; please respect Yahoo Japan's Terms of Service.
+- Yahoo Japan caps each individual auction search at roughly **7,500
+  items**. The `kaiju --all` command bypasses this by splitting the
+  search into price ranges (see above); for other commands, narrow your
+  query (keyword + sub-category + date) if you need everything from a
+  busy parent category.
+- The price extractor is label-aware (`現在` / `落札` → Price, `即決` /
+  `希望落札` / `希望価格` → Buy-Now). `送料` (shipping) and `開始`
+  (starting price) are deliberately ignored so they cannot leak into
+  the price columns.
+- Item titles are picked from the longest non-promotional anchor / `alt`
+  for each listing, so badges like `New!!`, `急上昇`, `送料無料` no
+  longer get mistaken for the title.
+- For personal research use only; please respect Yahoo Japan's Terms of
+  Service.
